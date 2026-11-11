@@ -24,7 +24,9 @@ def load_pubmedqa(config: DataConfig) -> pd.DataFrame:
     """Download PubMedQA and return question, cleaned_context, long_answer, final_decision."""
     from datasets import load_dataset  # Imported here so tests do not need the Hub.
 
-    ds = load_dataset(config.dataset_name, config.dataset_subset, split="train")
+    ds = load_dataset(
+        config.dataset_name, config.dataset_subset, split="train", revision=config.dataset_revision
+    )
     return pd.DataFrame({
         "question": ds["question"],
         "cleaned_context": [clean_context(c["contexts"]) for c in ds["context"]],

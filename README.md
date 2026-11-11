@@ -25,7 +25,9 @@ Fine-Tuning for Biomedical Research QA*.
    | Length filter | ≤ 1,024 tokens | 9,998 |
    | Split | Stratified 80/10/10, seed 42 | 7,998 / 1,000 / 1,000 |
 
-   Row counts are from the original dissertation run.
+   Row counts are from the original dissertation run. **Verified:** splits regenerated
+   with this code are byte-identical to the dissertation's (2026-11-11). The dataset
+   and tokenizer revisions are pinned in `DataConfig` so they stay that way.
 2. **Adaptation**: each method adapts the same base model.
    - Prompt engineering: search for the best prompt, with no weight updates.
    - Prefix tuning: train learned prefix vectors (PEFT).

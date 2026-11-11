@@ -16,7 +16,11 @@ ANSWER_TEMPLATE = "Simplified Answer: {final_decision}\nDetailed Answer: {long_a
 class DataConfig:
     dataset_name: str = "qiaojin/PubMedQA"
     dataset_subset: str = "pqa_artificial"
+    # Hub commits pinned after the regenerated splits matched the dissertation's
+    # byte for byte (2026-11-11). Both predate the original run.
+    dataset_revision: str = "9001f2853fb87cab8d220904e0de81ac6973b318"
     tokenizer_name: str = "meta-llama/Llama-3.2-3B-Instruct"
+    tokenizer_revision: str = "0cb88a4f764b7a12671c53f0838cd831a0843b95"
     # Context and long answer need at least this many characters and words, plus a ".".
     min_chars: int = 30
     min_words: int = 5

@@ -145,13 +145,16 @@ newer releases can change results:
 | transformers | 4.47.0 |
 | peft | 0.15.2 |
 | accelerate | 1.6.0 |
-| bitsandbytes | 0.45.5 |
+| bitsandbytes | 0.48.2 (dissertation: 0.45.5) |
 | datasets | 3.5.1 |
 | evaluate | 0.4.3 |
 | bert-score | 0.3.13 |
 
-The dissertation itself ran on torch 2.7.0. This repo uses Colab's current torch
-instead, because reinstalling torch in Colab would replace its CUDA build.
+This repo differs from the dissertation's environment in two places:
+- **torch:** the dissertation ran on 2.7.0. This repo uses Colab's current torch,
+  because reinstalling torch in Colab would replace its CUDA build.
+- **bitsandbytes:** 0.45.5 has no CUDA 13 build, so it cannot load 4-bit models on
+  current Colab. 0.48.2 adds that build and uses the same NF4 quantisation scheme.
 
 - Never `pip install torch` in Colab. Use the version Colab provides.
 - When Colab's torch changes (shown by `notebooks/01_environment_check.ipynb`),

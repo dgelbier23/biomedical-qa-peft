@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 import torch
 
-from ai_lab.runtime.device import get_device, set_seed
+from biomedical_qa_peft.runtime.device import get_device, set_seed
 
 
 def _draw_random_values() -> tuple[float, float, float]:

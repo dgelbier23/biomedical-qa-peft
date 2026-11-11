@@ -1,4 +1,4 @@
-from ai_lab.viz.colours import LIFE_HISTORIES
+from biomedical_qa_peft.viz.colours import LIFE_HISTORIES
 
 
 def test_life_histories_matches_original_source_exactly() -> None:

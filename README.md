@@ -1,5 +1,5 @@
 
-# AI Lab
+# biomedical-qa-peft
 
 A development workspace for machine learning and deep learning.
 

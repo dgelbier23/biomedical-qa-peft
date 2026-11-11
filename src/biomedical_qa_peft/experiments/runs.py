@@ -7,8 +7,8 @@ from pathlib import Path
 import torch
 from torch import nn
 
-from ai_lab.experiments.config import ExperimentConfig, save_config
-from ai_lab.runtime.env import describe_environment
+from biomedical_qa_peft.experiments.config import ExperimentConfig, save_config
+from biomedical_qa_peft.runtime.env import describe_environment
 
 
 def create_run_dir(runs_dir: Path, config: ExperimentConfig) -> Path:

@@ -3,9 +3,9 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
-from ai_lab.ml.data import make_dataloaders, make_synthetic_classification
-from ai_lab.ml.model import SimpleClassifier
-from ai_lab.ml.train import train_one_epoch
+from biomedical_qa_peft.ml.data import make_dataloaders, make_synthetic_classification
+from biomedical_qa_peft.ml.model import SimpleClassifier
+from biomedical_qa_peft.ml.train import train_one_epoch
 
 CPU = torch.device("cpu")
 

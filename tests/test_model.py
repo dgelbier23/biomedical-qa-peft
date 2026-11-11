@@ -1,5 +1,5 @@
 import torch
-from ai_lab.ml.model import SimpleClassifier
+from biomedical_qa_peft.ml.model import SimpleClassifier
 
 def test_classifier_output_shape():
     model = SimpleClassifier(input_dim=20, num_classes=3)

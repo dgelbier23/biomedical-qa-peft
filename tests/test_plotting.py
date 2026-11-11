@@ -5,8 +5,8 @@ import pytest
 go = pytest.importorskip("plotly.graph_objects")
 pio = pytest.importorskip("plotly.io")
 
-from ai_lab.viz.colours import LIFE_HISTORIES  # noqa: E402
-from ai_lab.viz.plotting import use_theme  # noqa: E402
+from biomedical_qa_peft.viz.colours import LIFE_HISTORIES  # noqa: E402
+from biomedical_qa_peft.viz.plotting import use_theme  # noqa: E402
 
 
 @pytest.fixture(autouse=True)

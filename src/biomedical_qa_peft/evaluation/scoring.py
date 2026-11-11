@@ -21,6 +21,7 @@ from biomedical_qa_peft.evaluation.metrics import (
     nli_results,
     score_short_answers,
 )
+from biomedical_qa_peft.runtime.env import describe_environment
 
 
 @dataclass
@@ -158,6 +159,7 @@ def run_method(
         system_prompt=system_prompt,
         inference_config=asdict(config),
         inference_seconds=seconds,
+        environment=describe_environment(),
         rows=len(predictions),
         results=results,
         **metadata,

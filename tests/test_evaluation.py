@@ -218,6 +218,7 @@ def test_run_method_saves_then_reuses_predictions(
     assert first == second and first["accuracy"] == 100.0  # reference answer is "no"
     record = (tmp_path / "results.json").read_text()
     assert '"method": "baseline"' in record and '"seed": 42' in record
+    assert '"gpu":' in record  # environment is recorded
 
 
 def test_compare_to_dissertation_uses_tolerances(capsys: pytest.CaptureFixture) -> None:

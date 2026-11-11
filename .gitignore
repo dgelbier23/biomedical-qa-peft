@@ -4,6 +4,7 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+.pytest_cache/
 
 # Virtual environments
 .venv/
@@ -16,6 +17,7 @@ env/
 !.env.example
 *.pem
 *.key
+.netrc
 
 # Jupyter
 .ipynb_checkpoints/
@@ -23,7 +25,7 @@ env/
 # Machine learning artifacts and data
 artifacts/*
 !artifacts/.gitkeep
-data/
+/data/
 datasets/
 checkpoints/
 *.pt
@@ -31,6 +33,16 @@ checkpoints/
 *.ckpt
 *.safetensors
 *.onnx
+
+# Dissertation data, models and results: regenerate data from PubMedQA;
+# Llama 3.2 weights, tokenizers and adapters must not be redistributed.
+*.jsonl
+*.bin
+*.pkl
+*.pickle
+models/
+adapters/
+wandb/
 
 # Local editor / OS files
 .vscode/

@@ -6,11 +6,23 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "biomedical-qa-peft"
 version = "0.1.0"
-description = "Machine learning experimentation workspace"
+description = "Comparing prompt engineering, prefix tuning and LoRA for biomedical research QA (Llama 3.2 3B, PubMedQA)"
 requires-python = ">=3.10"
+# Exact versions live in requirements.txt (local) and requirements-colab.txt (GPU).
 dependencies = [
-    "numpy",
     "torch",
+    "transformers",
+    "peft",
+    "datasets",
+    "evaluate",
+    "nltk",
+    "scikit-learn",
+    "numpy",
+    "pandas",
+    "matplotlib",
+    "seaborn",
+    "tabulate",
+    "tqdm",
 ]
 
 [tool.setuptools.packages.find]

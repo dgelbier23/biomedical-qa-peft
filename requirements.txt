@@ -1,10 +1,23 @@
-# Local development environment (CPU).
-# torch is pinned to match Google Colab's preinstalled version, so local tests
-# exercise the same PyTorch API that Colab runs. Re-check after Colab updates
-# (notebooks/01_gpu_check.ipynb prints the Colab version).
-# Do NOT install this file in Colab: it would replace Colab's CUDA build.
-numpy
+# Local development environment (CPU): data processing, metrics and tests.
+# Do NOT install this file in Colab: it would replace Colab's CUDA build of torch.
+# Colab uses requirements-colab.txt instead.
+#
+# torch is pinned to Colab's preinstalled version, so local tests exercise the same
+# PyTorch API that Colab runs (notebooks/01_environment_check.ipynb prints it).
+# The Hugging Face stack is pinned to the dissertation's versions, matching
+# requirements-colab.txt, so local preprocessing and metrics match the original.
 torch==2.11.0
+transformers==4.47.0
+peft==0.15.2
+datasets==3.5.1
+evaluate==0.4.3
+nltk==3.9.1
+scikit-learn==1.6.1
+numpy
+pandas
+matplotlib
+seaborn
+tabulate
+tqdm
 pytest
 jupyter
-plotly  # biomedical_qa_peft.viz.plotting and notebooks; preinstalled in Colab.

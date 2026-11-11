@@ -1,0 +1,14 @@
+# Colab GPU runtime: training and LLM inference for the faithful port.
+# Pins the dissertation's original versions, because newer releases can change
+# results (prefix tuning in particular has broken across transformers versions).
+# torch is deliberately absent: always use Colab's preinstalled CUDA build.
+# Install from a notebook with: %pip install -q -r requirements-colab.txt
+transformers==4.47.0
+peft==0.15.2
+accelerate==1.6.0
+bitsandbytes==0.45.5
+datasets==3.5.1
+evaluate==0.4.3
+bert-score==0.3.13
+nltk==3.9.1
+scikit-learn==1.6.1

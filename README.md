@@ -8,8 +8,9 @@ A clean, reproducible rebuild of my BSc dissertation, *Comparing Parameter-Effic
 Fine-Tuning for Biomedical Research QA*.
 
 > **Status: migration in progress.** The original dissertation code is being ported
-> stage by stage. Behaviour is reproduced faithfully first, then improved. Results
-> will be added here only once they have been reproduced in this repo.
+> stage by stage. Behaviour is reproduced faithfully first, then improved.
+> So far, the data splits and the baseline and prompt-engineering results are
+> reproduced; prefix tuning and LoRA are next.
 
 ## Pipeline
 
@@ -44,17 +45,32 @@ Fine-Tuning for Biomedical Research QA*.
    Predictions and `results.json` (summary, prompt, decoding settings, seed, environment)
    are saved for every run.
 
-### Dissertation results (original run, 1,000 test rows)
+### Results (1,000 test rows)
+
+Each cell shows **dissertation → reproduced**. Reproduced runs use this code with
+seed 42 on an A100 GPU.
 
 | Method | Accuracy | F1 | NLI entailment | METEOR | BERTScore |
 |---|---|---|---|---|---|
-| Baseline | 82.6% | 82.5% | 16.6% | 0.232 | 0.783 |
-| Prompt engineering | 76.5% | 76.7% | 19.6% | 0.244 | 0.777 |
-| Prefix tuning | 69.9% | 70.3% | 6.6% | 0.236 | 0.786 |
-| LoRA | 65.5% | 65.6% | 5.3% | 0.231 | 0.788 |
+| Baseline | 82.6% → 81.7% | 82.5% → 81.5% | 16.6% → 19.3% | 0.232 → 0.234 | 0.783 → 0.783 |
+| Prompt engineering | 76.5% → 74.9% | 76.7% → 74.8% | 19.6% → 16.2% | 0.244 → 0.244 | 0.777 → 0.779 |
+| Prefix tuning | 69.9% → *pending* | 70.3% → *pending* | 6.6% → *pending* | 0.236 → *pending* | 0.786 → *pending* |
+| LoRA | 65.5% → *pending* | 65.6% → *pending* | 5.3% → *pending* | 0.231 → *pending* | 0.788 → *pending* |
 
-These come from single, unseeded sampling runs. They are being re-run with this code;
-see `evaluation/config.py` for the full table and tolerances.
+The dissertation numbers come from single, unseeded sampling runs, so a re-run can only
+match them within sampling noise. Before running anything, we agreed tolerances of
+±3.5 percentage points and ±0.01 for METEOR and BERTScore (see `evaluation/config.py`).
+
+**Baseline and prompt engineering are reproduced (2026-11-11).**
+- 19 of the 20 values are within tolerance.
+- The exception is baseline NLI "neutral": 73.9% → 70.2%, a gap of 3.7 points. That is
+  consistent with sampling noise: for a share near 72%, the 95% range between two runs of
+  1,000 rows is about ±3.9 points.
+- The main finding holds: prompt engineering scores about 7 points below the baseline on
+  accuracy.
+- Short-answer scores came out about 1–2 points lower for both methods. That is within
+  noise, but it could also be a small systematic shift from the different GPU or the
+  newer bitsandbytes; one run cannot tell these apart.
 
 ### Known issues (ported as-is, to be fixed after the faithful port)
 
@@ -66,6 +82,10 @@ see `evaluation/config.py` for the full table and tolerances.
    prediction with BERT's `[SEP]`, which RoBERTa does not use.
 4. **The yes/no judge is the model being evaluated.**
 5. **Each method has a single sampling run,** and the prompt search used only 100 rows.
+   On 100 rows, accuracy varies by about ±12 points between runs. In the reproduced
+   search, the chosen prompt (candidate 5) scored 72% while candidates 1 and 2 scored 75%.
+6. **The prompt was chosen on test rows.** The search used the first 100 *test* rows, so
+   test data influenced the method being tested. It should use the validation split.
 
 ## Repository layout
 

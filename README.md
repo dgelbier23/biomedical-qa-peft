@@ -32,9 +32,40 @@ Fine-Tuning for Biomedical Research QA*.
    - Prompt engineering: search for the best prompt, with no weight updates.
    - Prefix tuning: train learned prefix vectors (PEFT).
    - LoRA: train low-rank adapters on a 4-bit quantised base model (PEFT + bitsandbytes).
-3. **Evaluation**: run inference with every method on the same fixed test split and
-   decoding settings, then score it with the evaluation framework (classification
-   metrics, METEOR, BERTScore and NLI-based checks).
+3. **Evaluation** (`biomedical_qa_peft.evaluation`, settings in `InferenceConfig`): every
+   method answers the same 1,000 test rows with the same decoding settings. Each answer
+   is then scored on:
+   - **Format adherence**: "Simplified Answer: yes/no" followed by "Detailed Answer: ...".
+   - **Short answer**: yes/no is extracted by regex, with an LLM judge as fallback.
+     Reported as accuracy and weighted precision/recall/F1.
+   - **Long answer**: NLI against the reference with RoBERTa-large-MNLI, plus METEOR and
+     BERTScore.
+
+   Predictions and `results.json` (summary, prompt, decoding settings, seed, environment)
+   are saved for every run.
+
+### Dissertation results (original run, 1,000 test rows)
+
+| Method | Accuracy | F1 | NLI entailment | METEOR | BERTScore |
+|---|---|---|---|---|---|
+| Baseline | 82.6% | 82.5% | 16.6% | 0.232 | 0.783 |
+| Prompt engineering | 76.5% | 76.7% | 19.6% | 0.244 | 0.777 |
+| Prefix tuning | 69.9% | 70.3% | 6.6% | 0.236 | 0.786 |
+| LoRA | 65.5% | 65.6% | 5.3% | 0.231 | 0.788 |
+
+These come from single, unseeded sampling runs. They are being re-run with this code;
+see `evaluation/config.py` for the full table and tolerances.
+
+### Known issues (ported as-is, to be fixed after the faithful port)
+
+1. **The required answer format is impossible.** `no_repeat_ngram_size=2` bans the second
+   "Answer:", so format adherence is 0% for every method.
+2. **Prompts differ between training and testing.** Prefix tuning and LoRA are trained
+   with the dataset's system prompt but tested with the shorter baseline prompt.
+3. **The NLI input is not a real premise/hypothesis pair.** It joins reference and
+   prediction with BERT's `[SEP]`, which RoBERTa does not use.
+4. **The yes/no judge is the model being evaluated.**
+5. **Each method has a single sampling run,** and the prompt search used only 100 rows.
 
 ## Repository layout
 
@@ -95,6 +126,7 @@ Notebooks run locally (`.venv` kernel) or in Google Colab, unchanged.
 |---|---|---|
 | `01_environment_check` | local or Colab | versions, device, output folder |
 | `02_prepare_data` | Colab (CPU is enough) | build the PubMedQA train/validation/test splits |
+| `03_baseline_prompt_engineering` | Colab (GPU) | baseline and prompt-engineered answers, scored; optional prompt search |
 
 ## Reproducibility
 

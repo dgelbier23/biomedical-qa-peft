@@ -38,19 +38,19 @@ def describe_environment() -> dict[str, str | bool | None]:
     }
 
 
-def get_runs_dir(drive_subdir: str | None = None) -> Path:
-    """Folder for run outputs, created if missing.
+def get_output_dir(kind: str) -> Path:
+    """Folder for one kind of generated output (e.g. "data", "runs"), created if missing.
 
-    In Colab: mounts Google Drive and returns ``MyDrive/<drive_subdir>``, by default
-    ``MyDrive/<repo name>/runs``, so outputs survive the runtime and stay separate per
-    project. Locally: ``<repo>/artifacts/runs`` (ignored by Git).
+    In Colab: mounts Google Drive and returns ``MyDrive/<repo name>/<kind>``, so outputs
+    survive the runtime and stay separate per project. Locally:
+    ``<repo>/artifacts/<kind>`` (ignored by Git).
     """
     if in_colab():
         from google.colab import drive
 
         drive.mount(str(DRIVE_ROOT.parent))
-        runs_dir = DRIVE_ROOT / (drive_subdir or f"{REPO_ROOT.name}/runs")
+        out_dir = DRIVE_ROOT / REPO_ROOT.name / kind
     else:
-        runs_dir = REPO_ROOT / "artifacts" / "runs"
-    runs_dir.mkdir(parents=True, exist_ok=True)
-    return runs_dir
+        out_dir = REPO_ROOT / "artifacts" / kind
+    out_dir.mkdir(parents=True, exist_ok=True)
+    return out_dir

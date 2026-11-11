@@ -13,8 +13,19 @@ Fine-Tuning for Biomedical Research QA*.
 
 ## Pipeline
 
-1. **Data**: load PubMedQA, preprocess it into a Llama 3 chat format, split it into
-   train/validation/test, and apply the prompt templates.
+1. **Data** (`biomedical_qa_peft.data`, defaults in `DataConfig`):
+
+   | Step | Rule | Rows after |
+   |---|---|---|
+   | Load | PubMedQA `pqa_artificial`; context passages joined | 211,269 |
+   | Validity filter | Context and long answer: ≥30 characters, ≥5 words, contain a "."; question contains "?" | 210,798 |
+   | Remove duplicates | Same question and context | 210,751 |
+   | Balance | 5,000 "yes" + 5,000 "no", seed 42 | 10,000 |
+   | Format | Llama 3 chat template (system / user / assistant) | – |
+   | Length filter | ≤ 1,024 tokens | 9,998 |
+   | Split | Stratified 80/10/10, seed 42 | 7,998 / 1,000 / 1,000 |
+
+   Row counts are from the original dissertation run.
 2. **Adaptation**: each method adapts the same base model.
    - Prompt engineering: search for the best prompt, with no weight updates.
    - Prefix tuning: train learned prefix vectors (PEFT).
@@ -75,8 +86,13 @@ Notebooks run locally (`.venv` kernel) or in Google Colab, unchanged.
   (fine-grained, read-only). Locally it does nothing.
 - In Colab, open notebooks via File > Open notebook > GitHub, pick a GPU runtime,
   and treat them as read-only: edit in VS Code, push, then re-run in Colab.
-- Run outputs go to `get_runs_dir()`: `MyDrive/<repo name>/runs` in Colab (pass a
-  different subfolder to change it) and `artifacts/runs` locally (ignored by Git).
+- Generated outputs go to `get_output_dir(kind)`, for example `"data"` or `"runs"`. That is
+  `MyDrive/<repo name>/<kind>` in Colab and `artifacts/<kind>` locally (ignored by Git).
+
+| Notebook | Runs on | Purpose |
+|---|---|---|
+| `01_environment_check` | local or Colab | versions, device, output folder |
+| `02_prepare_data` | Colab (CPU is enough) | build the PubMedQA train/validation/test splits |
 
 ## Reproducibility
 

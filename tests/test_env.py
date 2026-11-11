@@ -16,18 +16,18 @@ def test_describe_environment_locally() -> None:
     assert isinstance(info["git_dirty"], bool)
 
 
-def test_runs_dir_locally_is_under_artifacts(
+def test_output_dir_locally_is_under_artifacts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(env, "REPO_ROOT", tmp_path)
 
-    runs_dir = env.get_runs_dir()
+    out_dir = env.get_output_dir("data")
 
-    assert runs_dir == tmp_path / "artifacts" / "runs"
-    assert runs_dir.is_dir()
+    assert out_dir == tmp_path / "artifacts" / "data"
+    assert out_dir.is_dir()
 
 
-def test_runs_dir_in_colab_mounts_drive_and_uses_subdir(
+def test_output_dir_in_colab_mounts_drive_under_repo_name(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     mounted: list[str] = []
@@ -36,12 +36,10 @@ def test_runs_dir_in_colab_mounts_drive_and_uses_subdir(
     monkeypatch.setitem(sys.modules, "google", types.ModuleType("google"))
     monkeypatch.setitem(sys.modules, "google.colab", colab)
     monkeypatch.setattr(env, "DRIVE_ROOT", tmp_path / "MyDrive")
+    monkeypatch.setattr(env, "REPO_ROOT", tmp_path / "my-project")
 
-    runs_dir = env.get_runs_dir("experiments/custom")
+    out_dir = env.get_output_dir("runs")
 
     assert mounted == [str(tmp_path)]
-    assert runs_dir == tmp_path / "MyDrive" / "experiments" / "custom"
-    assert runs_dir.is_dir()
-
-    monkeypatch.setattr(env, "REPO_ROOT", tmp_path / "my-project")
-    assert env.get_runs_dir() == tmp_path / "MyDrive" / "my-project" / "runs"
+    assert out_dir == tmp_path / "MyDrive" / "my-project" / "runs"
+    assert out_dir.is_dir()

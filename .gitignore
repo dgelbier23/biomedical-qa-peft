@@ -44,6 +44,9 @@ models/
 adapters/
 wandb/
 
+# Local-only notes about the dissertation report (the report itself stays private)
+/private/
+
 # Local editor / OS files
 .vscode/
 .DS_Store

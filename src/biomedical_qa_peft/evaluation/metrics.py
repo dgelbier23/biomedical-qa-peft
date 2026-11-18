@@ -1,20 +1,13 @@
-"""Evaluation metrics ported from the dissertation's evaluation_metrics.py.
-
-Known flaws kept on purpose until the improvements stage: the NLI input joins
-reference and prediction with "[SEP]" (not RoBERTa's separator), and the yes/no
-judge is the model under test.
-"""
+"""Evaluation metrics: answer format, short (yes/no) answer and long answer."""
 
 import re
 from collections.abc import Callable
 from typing import Any
 
-import torch
+import numpy as np
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
 
-from biomedical_qa_peft.evaluation.config import JUDGE_PROMPT
-
-LABELS = {"no": 0, "yes": 1, "unclear": 2}
+LABELS = {"no": 0, "yes": 1}
 NLI_LABELS = ("ENTAILMENT", "CONTRADICTION", "NEUTRAL")
 
 _FORMAT = re.compile(
@@ -46,55 +39,13 @@ def extract_short_answer(text: str) -> str:
     return match.group(1).lower() if match else "not_found"
 
 
-def judge_short_answers(texts: list[str], model: Any, tokenizer: Any) -> list[str]:
-    """Ask the LLM for yes / no / unclear for each text, greedily, in one batch.
+def score_short_answers(yes_probabilities: list[float], references: list[str]) -> dict[str, Any]:
+    """Accuracy and weighted precision/recall/F1 (0-1) of yes/no answers.
 
-    The chat template inserts today's date, so judge inputs differ slightly from the
-    original run's.
+    An answer is "yes" when P(yes) > 0.5. Returns the metrics and the integer labels.
     """
-    messages = [
-        [{"role": "system", "content": JUDGE_PROMPT}, {"role": "user", "content": text}]
-        for text in texts
-    ]
-    inputs = tokenizer.apply_chat_template(
-        messages, return_tensors="pt", truncation=True, padding=True, add_generation_prompt=True
-    ).to(model.device)
-    with torch.no_grad():
-        outputs = model.generate(
-            input_ids=inputs,
-            max_new_tokens=4,
-            attention_mask=(inputs != tokenizer.pad_token_id),
-            do_sample=False,
-        )
-    answers = tokenizer.batch_decode(outputs[:, inputs.shape[1]:], skip_special_tokens=True)
-    return [
-        m.group(0).lower() if (m := re.search(r"\b(yes|no|unclear)\b", a, re.IGNORECASE))
-        else "unclear"
-        for a in answers
-    ]
-
-
-def score_short_answers(
-    predictions: list[str],
-    references: list[str],
-    judge: Callable[[list[str]], list[str]],
-    batch_size: int,
-) -> dict[str, Any]:
-    """Accuracy and weighted precision/recall/F1 (0-1) over no/yes/unclear labels.
-
-    The regex extracts each answer; texts it cannot read go to `judge` in batches.
-    Returns the metrics and the integer labels (for a confusion matrix).
-    """
-    predicted = [LABELS.get(extract_short_answer(p), None) for p in predictions]
-    expected = [LABELS.get(extract_short_answer(r), 2) for r in references]
-
-    unread = [i for i, label in enumerate(predicted) if label is None]
-    judged: list[str] = []
-    for start in range(0, len(unread), batch_size):
-        judged += judge([predictions[i] for i in unread[start:start + batch_size]])
-    for i, answer in zip(unread, judged):
-        predicted[i] = LABELS.get(answer.strip().lower(), 2)
-
+    predicted = [int(p > 0.5) for p in yes_probabilities]
+    expected = [LABELS[extract_short_answer(r)] for r in references]
     return {
         "accuracy": accuracy_score(expected, predicted),
         "precision": precision_score(expected, predicted, average="weighted", zero_division=0),
@@ -107,26 +58,30 @@ def score_short_answers(
 
 def nli_results(
     nli_pipeline: Callable, predictions: list[str], references: list[str], batch_size: int
-) -> dict[str, dict[str, float]]:
-    """Count and mean confidence of each NLI label for "reference [SEP] prediction"."""
+) -> dict[str, Any]:
+    """NLI label of each pair (premise: reference, hypothesis: prediction), with counts and
+    mean confidence per label."""
+    labels: list[str] = []
     scores: dict[str, list[float]] = {label: [] for label in NLI_LABELS}
     for start in range(0, len(predictions), batch_size):
-        inputs = [
-            f"{ref} [SEP] {pred}"
+        pairs = [
+            {"text": ref, "text_pair": pred}
             for ref, pred in zip(
                 references[start:start + batch_size], predictions[start:start + batch_size]
             )
         ]
-        for result in nli_pipeline(inputs):
-            scores[result["label"].upper()].append(result["score"])
+        for result in nli_pipeline(pairs):
+            labels.append(result["label"].upper())
+            scores[labels[-1]].append(result["score"])
     return {
+        "labels": labels,
         "counts": {label: len(s) for label, s in scores.items()},
         "mean_confidence": {label: sum(s) / len(s) if s else 0.0 for label, s in scores.items()},
     }
 
 
-def meteor(predictions: list[str], references: list[str]) -> float:
-    """Mean METEOR over pairs; a pair that fails to score counts as 0, as in the original.
+def meteor_scores(predictions: list[str], references: list[str]) -> list[float]:
+    """METEOR per pair; a pair that fails to score counts as 0, as in the original.
 
     Needs the NLTK punkt, punkt_tab, wordnet and omw-1.4 data.
     """
@@ -140,10 +95,20 @@ def meteor(predictions: list[str], references: list[str]) -> float:
         except Exception as e:  # noqa: BLE001 - original behaviour
             print(f"METEOR failed for a pair, scored 0: {e}")
             scores.append(0.0)
-    return sum(scores) / len(scores) if scores else 0.0
+    return scores
 
 
-def bertscore_f1(predictions: list[str], references: list[str], bertscore: Any, model: str) -> float:
-    """Mean BERTScore F1."""
-    results = bertscore.compute(predictions=predictions, references=references, model_type=model)
-    return sum(results["f1"]) / len(results["f1"])
+def bertscore_scores(
+    predictions: list[str], references: list[str], bertscore: Any, model: str
+) -> list[float]:
+    """BERTScore F1 per pair."""
+    return bertscore.compute(predictions=predictions, references=references, model_type=model)["f1"]
+
+
+def bootstrap_ci(
+    statistic: Callable[[np.ndarray], float], n_rows: int, samples: int, seed: int
+) -> list[float]:
+    """95% percentile-bootstrap interval of statistic(row indices) over resampled rows."""
+    rng = np.random.default_rng(seed)
+    values = [statistic(rng.integers(0, n_rows, n_rows)) for _ in range(samples)]
+    return np.percentile(values, [2.5, 97.5]).tolist()

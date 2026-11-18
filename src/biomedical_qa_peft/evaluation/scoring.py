@@ -1,23 +1,23 @@
-"""Run every metric on a set of answers, summarise, compare and save (ports EvaluationManager)."""
+"""Run every metric on a set of answers, summarise with confidence intervals, and save."""
 
 import json
-from collections.abc import Callable
 from dataclasses import asdict, dataclass
-from functools import partial
 from multiprocessing.pool import ThreadPool
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
+from sklearn.metrics import f1_score
 
-from biomedical_qa_peft.evaluation.config import DISSERTATION_RESULTS, TOLERANCES, InferenceConfig
-from biomedical_qa_peft.evaluation.inference import build_prompt, generate_responses
+from biomedical_qa_peft.evaluation.config import InferenceConfig
+from biomedical_qa_peft.evaluation.inference import build_prompt, generate_responses, score_yes_no
 from biomedical_qa_peft.evaluation.metrics import (
     NLI_LABELS,
-    bertscore_f1,
+    bertscore_scores,
+    bootstrap_ci,
     format_stats,
-    judge_short_answers,
-    meteor,
+    meteor_scores,
     nli_results,
     score_short_answers,
 )
@@ -26,13 +26,12 @@ from biomedical_qa_peft.runtime.env import describe_environment
 
 @dataclass
 class Scorers:
-    judge: Callable[[list[str]], list[str]]
-    nli_pipeline: Callable
+    nli_pipeline: Any
     bertscore: Any
 
 
-def load_scorers(model: Any, tokenizer: Any, config: InferenceConfig) -> Scorers:
-    """Download the NLTK data, NLI model and BERTScore; the judge reuses `model`."""
+def load_scorers(config: InferenceConfig) -> Scorers:
+    """Download the NLTK data, NLI model and BERTScore. None of them is the model under test."""
     import evaluate
     import nltk
     from transformers import pipeline
@@ -40,7 +39,6 @@ def load_scorers(model: Any, tokenizer: Any, config: InferenceConfig) -> Scorers
     for package in ("omw-1.4", "punkt", "punkt_tab", "wordnet"):
         nltk.download(package, quiet=True)
     return Scorers(
-        judge=partial(judge_short_answers, model=model, tokenizer=tokenizer),
         nli_pipeline=pipeline("text-classification", model=config.nli_model),
         bertscore=evaluate.load("bertscore"),
     )
@@ -51,77 +49,99 @@ def _long_answer(
 ) -> dict[str, Any]:
     return {
         "nli": nli_results(scorers.nli_pipeline, predictions, references, config.nli_batch_size),
-        "meteor": meteor(predictions, references),
-        "bertscore": bertscore_f1(
+        "meteor": meteor_scores(predictions, references),
+        "bertscore": bertscore_scores(
             predictions, references, scorers.bertscore, config.bertscore_model
         ),
     }
 
 
 def evaluate_responses(
-    predictions: list[str], references: list[str], scorers: Scorers, config: InferenceConfig
+    yes_probabilities: list[float],
+    predictions: list[str],
+    references: list[str],
+    scorers: Scorers,
+    config: InferenceConfig,
 ) -> dict[str, Any]:
-    """Format, short-answer and long-answer evaluation, run concurrently as in the original.
-
-    Unlike the original, an error in any metric is raised instead of printed and skipped.
-    """
-    if len(predictions) != len(references):
-        # The original's prompt search crashed BERTScore and silently truncated the
-        # other metrics this way.
-        raise ValueError(f"{len(predictions)} predictions but {len(references)} references")
-    with ThreadPool(processes=3) as pool:
-        fmt = pool.apply_async(format_stats, (predictions,))
-        short = pool.apply_async(
-            score_short_answers, (predictions, references, scorers.judge, config.judge_batch_size)
-        )
+    """Format, short-answer and long-answer evaluation, run concurrently."""
+    if not len(yes_probabilities) == len(predictions) == len(references):
+        raise ValueError("yes_probabilities, predictions and references differ in length")
+    with ThreadPool(processes=2) as pool:
         long = pool.apply_async(_long_answer, (predictions, references, scorers, config))
-        return {"format": fmt.get(), "short_answer": short.get(), "long_answer": long.get()}
+        fmt = pool.apply_async(format_stats, (predictions,))
+        return {
+            "format": fmt.get(),
+            "short_answer": score_short_answers(yes_probabilities, references),
+            "long_answer": long.get(),
+        }
 
 
 def summarise(results: dict[str, Any]) -> dict[str, float]:
-    """The dissertation's table row: percentages (0-100), METEOR and BERTScore."""
+    """One table row: percentages (0-100), METEOR and BERTScore."""
     short = results["short_answer"]
-    counts = results["long_answer"]["nli"]["counts"]
+    long = results["long_answer"]
+    counts = long["nli"]["counts"]
     total = sum(counts.values())
     return {
         **{k: 100 * short[k] for k in ("accuracy", "precision", "recall", "f1")},
         **{label.lower(): 100 * counts[label] / total for label in NLI_LABELS},
-        "meteor": results["long_answer"]["meteor"],
-        "bertscore": results["long_answer"]["bertscore"],
+        "meteor": float(np.mean(long["meteor"])),
+        "bertscore": float(np.mean(long["bertscore"])),
         "format_adherence": results["format"]["valid_format_percentage"],
     }
 
 
-def compare_to_dissertation(summary: dict[str, float], method: str) -> dict[str, bool]:
-    """Print each value beside the dissertation's; True where it is within tolerance."""
-    within = {}
-    for key, target in DISSERTATION_RESULTS[method].items():
-        tolerance = TOLERANCES.get(key, TOLERANCES["percent"])
-        within[key] = abs(summary[key] - target) <= tolerance
-        print(
-            f"{key:>17}: {summary[key]:9.4f}  (dissertation {target:9.4f} ± {tolerance})  "
-            f"{'ok' if within[key] else 'DIFF'}"
-        )
-    return within
+def confidence_intervals(results: dict[str, Any], config: InferenceConfig) -> dict[str, list[float]]:
+    """95% bootstrap intervals over test rows, in the same units as summarise."""
+    predicted = np.array(results["short_answer"]["predictions"])
+    expected = np.array(results["short_answer"]["references"])
+    entailed = np.array(results["long_answer"]["nli"]["labels"]) == "ENTAILMENT"
+    meteor = np.array(results["long_answer"]["meteor"])
+    bertscore = np.array(results["long_answer"]["bertscore"])
+    statistics = {
+        "accuracy": lambda i: 100 * np.mean(predicted[i] == expected[i]),
+        "f1": lambda i: 100 * f1_score(expected[i], predicted[i], average="weighted", zero_division=0),
+        "entailment": lambda i: 100 * np.mean(entailed[i]),
+        "meteor": lambda i: np.mean(meteor[i]),
+        "bertscore": lambda i: np.mean(bertscore[i]),
+    }
+    return {
+        name: bootstrap_ci(statistic, len(predicted), config.bootstrap_samples, config.seed)
+        for name, statistic in statistics.items()
+    }
 
 
-def save_predictions(run_dir: Path, predictions: list[str], references: list[str]) -> None:
+def save_predictions(run_dir: Path, predictions: pd.DataFrame) -> None:
     run_dir.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame({"reference": references, "prediction": predictions}).to_json(
-        run_dir / "predictions.jsonl", orient="records", lines=True
-    )
+    predictions.to_json(run_dir / "predictions.jsonl", orient="records", lines=True)
 
 
-def load_predictions(run_dir: Path) -> tuple[list[str], list[str]]:
-    """(predictions, references) saved by save_predictions, e.g. to re-score a run."""
-    df = pd.read_json(run_dir / "predictions.jsonl", lines=True)
-    return df["prediction"].tolist(), df["reference"].tolist()
+def load_predictions(run_dir: Path) -> pd.DataFrame:
+    """The reference, prediction (and, from v2 on, yes_probability) of every test row."""
+    return pd.read_json(run_dir / "predictions.jsonl", lines=True)
+
+
+def load_summary(run_dir: Path) -> dict[str, float]:
+    return json.loads((run_dir / "results.json").read_text())["summary"]
 
 
 def save_results(run_dir: Path, **record: Any) -> None:
     """Write results.json: everything needed to interpret and repeat the run."""
     run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "results.json").write_text(json.dumps(record, indent=2, default=str))
+
+
+def yes_no_accuracy(
+    model: Any,
+    tokenizer: Any,
+    formatted_texts: list[str],
+    system_prompt: str | None,
+    config: InferenceConfig,
+) -> float:
+    """Short-answer accuracy (0-100) of a system prompt, without generating long answers."""
+    prompts, references = zip(*(build_prompt(t, system_prompt) for t in formatted_texts))
+    probabilities = score_yes_no(model, tokenizer, list(prompts), config)
+    return 100 * score_short_answers(probabilities, list(references))["accuracy"]
 
 
 def run_method(
@@ -134,33 +154,41 @@ def run_method(
     config: InferenceConfig,
     **metadata: Any,
 ) -> dict[str, float]:
-    """Generate answers for test rows, score them and save both under run_dir.
+    """Score yes/no answers, generate long answers, evaluate, and save under run_dir.
 
     If run_dir already holds predictions.jsonl (e.g. after a Colab disconnect during
-    scoring), those predictions are reused instead of regenerated. Delete the folder
-    to start over. Returns the summary row.
+    scoring), those predictions are reused. Delete the folder to start over. Returns
+    the summary row; results.json also holds the 95% confidence intervals.
     """
     prompts, references = zip(*(build_prompt(t, system_prompt) for t in formatted_texts))
     seconds = None
     if (run_dir / "predictions.jsonl").exists():
         print(f"Reusing saved predictions in {run_dir}")
-        predictions, saved_references = load_predictions(run_dir)
-        if saved_references != list(references):
+        saved = load_predictions(run_dir)
+        if saved["reference"].tolist() != list(references):
             raise ValueError(f"Saved predictions in {run_dir} are for different test rows")
     else:
+        probabilities = score_yes_no(model, tokenizer, list(prompts), config)
         predictions, seconds = generate_responses(model, tokenizer, list(prompts), config)
-        save_predictions(run_dir, predictions, list(references))
+        saved = pd.DataFrame({
+            "reference": references, "prediction": predictions, "yes_probability": probabilities,
+        })
+        save_predictions(run_dir, saved)
 
-    results = evaluate_responses(predictions, list(references), scorers, config)
+    results = evaluate_responses(
+        saved["yes_probability"].tolist(), saved["prediction"].tolist(), list(references),
+        scorers, config,
+    )
     summary = summarise(results)
     save_results(
         run_dir,
         summary=summary,
+        confidence_intervals=confidence_intervals(results, config),
         system_prompt=system_prompt,
         inference_config=asdict(config),
-        inference_seconds=seconds,
+        generation_seconds=seconds,
         environment=describe_environment(),
-        rows=len(predictions),
+        rows=len(references),
         results=results,
         **metadata,
     )

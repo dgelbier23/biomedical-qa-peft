@@ -7,9 +7,9 @@ prefix tuning and LoRA, and scored with a custom evaluation framework.
 A clean, reproducible rebuild of my BSc dissertation, *Comparing Parameter-Efficient
 Fine-Tuning for Biomedical Research QA*.
 
-> **Status: faithful port complete.** The original dissertation code was ported stage by
-> stage, and the data splits and all four methods' results are reproduced (tag
-> `v1-reproduction`). Next: fixing the known issues below.
+> **Status: improving the evaluation.** The original dissertation code was ported and its
+> results reproduced (git tag `v1-reproduction`). The evaluation fixes (v2) are in place;
+> the training fixes are next.
 
 ## Pipeline
 
@@ -37,16 +37,19 @@ Fine-Tuning for Biomedical Research QA*.
      quantised base model (PEFT + bitsandbytes). That trains and saves 2,293,760
      parameters (about 0.07%).
 3. **Evaluation** (`biomedical_qa_peft.evaluation`, settings in `InferenceConfig`): every
-   method answers the same 1,000 test rows with the same decoding settings. Each answer
-   is then scored on:
+   method answers the same 1,000 test rows with the same settings, in one session
+   (`notebooks/06_evaluate.ipynb`). Each answer is scored on:
+   - **Short answer**: yes/no read from the model's next-token probabilities after
+     "Simplified Answer:". Deterministic, and no LLM judge. Reported as accuracy and
+     weighted precision/recall/F1.
+   - **Long answer**: generated greedily, then scored with NLI (RoBERTa-large-MNLI, the
+     reference as premise and the answer as hypothesis), METEOR and BERTScore.
    - **Format adherence**: "Simplified Answer: yes/no" followed by "Detailed Answer: ...".
-   - **Short answer**: yes/no is extracted by regex, with an LLM judge as fallback.
-     Reported as accuracy and weighted precision/recall/F1.
-   - **Long answer**: NLI against the reference with RoBERTa-large-MNLI, plus METEOR and
-     BERTScore.
 
-   Predictions and `results.json` (summary, prompt, decoding settings, seed, environment)
-   are saved for every run.
+   The prompt-engineering prompt and the repetition penalty are chosen on the validation
+   split (`notebooks/03_prompt_search.ipynb`), never on test rows. Accuracy, F1, entailment, METEOR and
+   BERTScore get 95% bootstrap confidence intervals over the test rows. Predictions and `results.json`
+   (summary, intervals, prompt, decoding settings, environment) are saved for every run.
 
 ### Results (1,000 test rows)
 
@@ -97,23 +100,26 @@ match them within sampling noise. Before running anything, we agreed tolerances 
   run cannot separate methods a few points apart (known issue 5).
 - The dissertation's ranking holds: baseline > prompt engineering > prefix tuning > LoRA.
 
-### Known issues (ported as-is, to be fixed after the faithful port)
+### Known issues in the dissertation's method
 
-1. **The required answer format is impossible.** `no_repeat_ngram_size=2` bans the second
+The v1 reproduction keeps these on purpose. Issues 1, 3, 4, 5 and 6 are fixed in the v2
+evaluation; issues 2, 7, 8 and 9 are fixed in training next.
+
+1. *(Fixed in v2.)* **The required answer format is impossible.** `no_repeat_ngram_size=2` bans the second
    "Answer:", so format adherence is 0% for every method.
 2. **Training and test inputs differ slightly.** Prefix tuning and LoRA are both trained
    and tested with the baseline prompt. However, prefix tuning's training text starts
    with two `<|begin_of_text|>` tokens (the text keeps one and the tokenizer adds
    another), while LoRA's training text and all test prompts start with one.
-3. **The NLI input is not a real premise/hypothesis pair.** It joins reference and
+3. *(Fixed in v2.)* **The NLI input is not a real premise/hypothesis pair.** It joins reference and
    prediction with BERT's `[SEP]`, which RoBERTa does not use.
-4. **The yes/no judge is the model being evaluated.** For LoRA it even runs with the
+4. *(Fixed in v2.)* **The yes/no judge is the model being evaluated.** For LoRA it even runs with the
    adapter active, because loading LoRA changes the model in place; for prefix tuning it
    is the base model.
-5. **Each method has a single sampling run,** and the prompt search used only 100 rows.
+5. *(Fixed in v2.)* **Each method has a single sampling run,** and the prompt search used only 100 rows.
    On 100 rows, accuracy varies by about ±12 points between runs. In the reproduced
    search, the chosen prompt (candidate 5) scored 72% while candidates 1 and 2 scored 75%.
-6. **The prompt was chosen on test rows.** The search used the first 100 *test* rows, so
+6. *(Fixed in v2.)* **The prompt was chosen on test rows.** The search used the first 100 *test* rows, so
    test data influenced the method being tested. It should use the validation split.
 7. **Prefix tuning keeps its final weights, not its best checkpoint.** Training stops
    early when validation loss stops improving. It should then reload the best checkpoint
@@ -186,9 +192,10 @@ Notebooks run locally (`.venv` kernel) or in Google Colab, unchanged.
 |---|---|---|
 | `01_environment_check` | local or Colab | versions, device, output folder |
 | `02_prepare_data` | Colab (CPU is enough) | build the PubMedQA train/validation/test splits |
-| `03_baseline_prompt_engineering` | Colab (GPU) | baseline and prompt-engineered answers, scored; optional prompt search |
-| `04_prefix_tuning` | Colab (L4 or A100; training ≈ 2 h on L4) | evaluate the original prefix adapter; retrain and evaluate |
-| `05_lora` | Colab (L4 or A100; training ≈ 3 h on L4, resumable) | evaluate the original LoRA adapter; retrain and evaluate |
+| `03_prompt_search` | Colab (GPU, ≈ 10 min) | choose the prompt-engineering prompt and repetition penalty on validation |
+| `04_prefix_tuning` | Colab (GPU; ≈ 2 h on L4) | train the prefix |
+| `05_lora` | Colab (GPU; ≈ 3 h on L4, resumable) | train the LoRA adapters |
+| `06_evaluate` | Colab (GPU, ≈ 30-40 min on A100) | evaluate all four methods on the test split, compare with v1 |
 
 ## Reproducibility
 
@@ -196,27 +203,21 @@ Notebooks run locally (`.venv` kernel) or in Google Colab, unchanged.
 
 | Environment | File | torch | Hugging Face stack |
 |---|---|---|---|
-| Local (CPU) | `requirements.txt` | pinned to Colab's version | dissertation versions |
-| Colab (GPU) | `requirements-colab.txt` | Colab's preinstalled build | dissertation versions |
+| Local (CPU) | `requirements.txt` | pinned to Colab's version | pinned (below) |
+| Colab (GPU) | `requirements-colab.txt` | Colab's preinstalled build | pinned (below) |
 
-The Hugging Face stack is pinned to the versions the dissertation used, because
-newer releases can change results:
+| Package | Version | v1 reproduction (dissertation) |
+|---|---|---|
+| transformers | 5.23.0 | 4.47.0 |
+| peft | 0.21.3 | 0.15.2 |
+| accelerate | 1.16.0 | 1.6.0 |
+| bitsandbytes | 0.50.2 | 0.48.2 (dissertation: 0.45.5, which has no CUDA 13 build) |
+| datasets | 5.2.0 | 3.5.1 |
+| evaluate | 0.4.6 | 0.4.3 |
+| bert-score | 0.3.13 | 0.3.13 |
 
-| Package | Version |
-|---|---|
-| transformers | 4.47.0 |
-| peft | 0.15.2 |
-| accelerate | 1.6.0 |
-| bitsandbytes | 0.48.2 (dissertation: 0.45.5) |
-| datasets | 3.5.1 |
-| evaluate | 0.4.3 |
-| bert-score | 0.3.13 |
-
-This repo differs from the dissertation's environment in two places:
-- **torch:** the dissertation ran on 2.7.0. This repo uses Colab's current torch,
-  because reinstalling torch in Colab would replace its CUDA build.
-- **bitsandbytes:** 0.45.5 has no CUDA 13 build, so it cannot load 4-bit models on
-  current Colab. 0.48.2 adds that build and uses the same NF4 quantisation scheme.
+The v1 reproduction used the dissertation's versions; check out the tag
+`v1-reproduction` to rerun it exactly.
 
 - Never `pip install torch` in Colab. Use the version Colab provides.
 - When Colab's torch changes (shown by `notebooks/01_environment_check.ipynb`),

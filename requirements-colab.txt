@@ -1,17 +1,15 @@
-# Colab GPU runtime: training and LLM inference for the faithful port.
-# Pins the dissertation's original versions, because newer releases can change
-# results (prefix tuning in particular has broken across transformers versions).
+# Colab GPU runtime: training and LLM inference.
+# Exact pins, so every run uses the same library versions (results.json records them).
+# The dissertation's original versions (transformers 4.47, peft 0.15.2) are pinned at
+# the git tag v1-reproduction.
 # torch is deliberately absent: always use Colab's preinstalled CUDA build.
 # Install from a notebook with: %pip install -q -r requirements-colab.txt
-transformers==4.47.0
-peft==0.15.2
-accelerate==1.6.0
-# Dissertation used 0.45.5, which has no CUDA 13 build (fails on current Colab with
-# "undefined symbol: cquantize_blockwise_fp16_nf4"). 0.48.0 is the first release with
-# CUDA 13; the NF4 quantisation scheme is unchanged.
-bitsandbytes==0.48.2
-datasets==3.5.1
-evaluate==0.4.3
+transformers==5.23.0
+peft==0.21.3
+accelerate==1.16.0
+bitsandbytes==0.50.2
+datasets==5.2.0
+evaluate==0.4.6
 bert-score==0.3.13
 nltk==3.9.1
 scikit-learn==1.6.1

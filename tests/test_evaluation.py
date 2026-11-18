@@ -5,17 +5,16 @@ import torch
 
 from biomedical_qa_peft.data.config import SYSTEM_PROMPT
 from biomedical_qa_peft.evaluation import metrics, scoring
-from biomedical_qa_peft.evaluation.config import (
-    BASELINE_PROMPT,
-    DISSERTATION_RESULTS,
-    InferenceConfig,
-)
+from biomedical_qa_peft.evaluation.config import BASELINE_PROMPT, InferenceConfig
 from biomedical_qa_peft.evaluation.inference import (
+    ANSWER_PREFIX,
     build_prompt,
     extract_response,
     generate_responses,
+    score_yes_no,
 )
 from biomedical_qa_peft.evaluation.metrics import (
+    bootstrap_ci,
     extract_short_answer,
     format_stats,
     has_valid_format,
@@ -108,7 +107,7 @@ def test_generate_responses_keeps_prompt_order_across_batches() -> None:
 
 def test_format_check_accepts_reference_layout_only() -> None:
     assert has_valid_format(REFERENCE)
-    # What no_repeat_ngram_size=2 forces the models to write instead:
+    # What the dissertation's no_repeat_ngram_size=2 forced the models to write:
     assert not has_valid_format("Simplified Answer : yes\nDetailedAnswer: Because.")
     assert format_stats([REFERENCE, "yes"]) == {
         "total_outputs": 2, "valid_format_count": 1,
@@ -126,108 +125,118 @@ def test_extract_short_answer(text: str, expected: str) -> None:
     assert extract_short_answer(text) == expected
 
 
-def test_score_short_answers_judges_only_unreadable_answers_in_batches() -> None:
-    judged_batches: list[list[str]] = []
+def test_score_yes_no_reads_next_token_probabilities_independent_of_batching(
+    tiny_llama, tokenizer
+) -> None:
+    model = tiny_llama()
+    prompts = ["is the drug safe", "it was tested in mice", "the answer"]
+    with pytest.raises(ValueError):  # right padding would read a pad token's logits
+        score_yes_no(model, tokenizer, prompts, InferenceConfig(num_workers=0))
+    tokenizer.padding_side = "left"  # as load_base_model sets it
+    one = score_yes_no(model, tokenizer, prompts, InferenceConfig(batch_size=1, num_workers=0))
+    padded = score_yes_no(model, tokenizer, prompts, InferenceConfig(batch_size=3, num_workers=0))
 
-    def judge(texts: list[str]) -> list[str]:
-        judged_batches.append(texts)
-        return [" Yes " if "think so" in t else "maybe" for t in texts]
+    # By hand for the first prompt: next-token probabilities after "Simplified Answer:".
+    ids = tokenizer(prompts[0] + ANSWER_PREFIX, return_tensors="pt")["input_ids"]
+    p = model(input_ids=ids).logits[0, -1].softmax(-1)
+    yes, no = (sum(p[tokenizer.convert_tokens_to_ids(w)] for w in pair)
+               for pair in (("yes", "Yes"), ("no", "No")))
 
-    predictions = ["Answer: no", "I think so", "No idea", "I think so too"]
-    references = ["Simplified Answer: no", "Simplified Answer: yes",
-                  "Simplified Answer: no", "Simplified Answer: yes"]
-
-    result = score_short_answers(predictions, references, judge, batch_size=2)
-
-    assert judged_batches == [["I think so", "No idea"], ["I think so too"]]
-    assert result["predictions"] == [0, 1, 2, 1]  # judge's "maybe" counts as unclear
-    assert result["references"] == [0, 1, 0, 1]
-    assert result["accuracy"] == 0.75
+    assert one[0] == pytest.approx((yes / (yes + no)).item(), abs=1e-6)
+    assert one == pytest.approx(padded, abs=1e-5)  # left padding does not change answers
 
 
-def test_nli_results_pairs_reference_then_prediction_in_batches() -> None:
-    seen: list[list[str]] = []
+def test_score_short_answers_thresholds_yes_probability() -> None:
+    references = ["Simplified Answer: no", "Simplified Answer: yes", "Simplified Answer: yes"]
 
-    def nli(inputs: list[str]) -> list[dict]:
+    result = score_short_answers([0.2, 0.9, 0.4], references)
+
+    assert result["predictions"] == [0, 1, 0]
+    assert result["references"] == [0, 1, 1]
+    assert result["accuracy"] == pytest.approx(2 / 3)
+
+
+def test_nli_results_pairs_reference_premise_with_prediction_in_batches() -> None:
+    seen: list[list[dict]] = []
+
+    def nli(inputs: list[dict]) -> list[dict]:
         seen.append(inputs)
-        return [{"label": "ENTAILMENT" if "same" in i else "neutral", "score": 0.5} for i in inputs]
+        return [{"label": "ENTAILMENT" if i["text_pair"] == "same" else "neutral", "score": 0.5}
+                for i in inputs]
 
     result = nli_results(nli, ["same", "b", "c"], ["r1", "r2", "r3"], batch_size=2)
 
-    assert seen == [["r1 [SEP] same", "r2 [SEP] b"], ["r3 [SEP] c"]]
+    assert seen == [[{"text": "r1", "text_pair": "same"}, {"text": "r2", "text_pair": "b"}],
+                    [{"text": "r3", "text_pair": "c"}]]
+    assert result["labels"] == ["ENTAILMENT", "NEUTRAL", "NEUTRAL"]
     assert result["counts"] == {"ENTAILMENT": 1, "CONTRADICTION": 0, "NEUTRAL": 2}
 
 
+def test_bootstrap_ci_brackets_the_mean_and_is_repeatable() -> None:
+    values = __import__("numpy").array([0, 1] * 50)
+
+    ci = bootstrap_ci(lambda i: values[i].mean(), len(values), samples=500, seed=0)
+
+    assert ci[0] < 0.5 < ci[1] and ci[1] - ci[0] < 0.3
+    assert ci == bootstrap_ci(lambda i: values[i].mean(), len(values), samples=500, seed=0)
+
+
+class BertScore:
+    def __init__(self, score: float) -> None:
+        self.score = score
+
+    def compute(self, predictions, references, model_type):
+        return {"f1": [self.score] * len(predictions)}
+
+
 def test_evaluate_references_against_themselves_scores_perfectly(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # METEOR needs NLTK data and BERTScore a download; both are stubbed here.
-    monkeypatch.setattr(scoring, "meteor", lambda p, r: 1.0)
-
-    class BertScore:
-        def compute(self, predictions, references, model_type):
-            return {"f1": [1.0] * len(predictions)}
-
+    monkeypatch.setattr(scoring, "meteor_scores", lambda p, r: [1.0] * len(p))
     scorers = scoring.Scorers(
-        judge=lambda texts: pytest.fail("judge should not be needed"),
         nli_pipeline=lambda inputs: [{"label": "ENTAILMENT", "score": 0.9} for _ in inputs],
-        bertscore=BertScore(),
+        bertscore=BertScore(1.0),
     )
     references = [REFERENCE, REFERENCE.replace("no", "yes", 1)]
+    config = InferenceConfig(bootstrap_samples=50)
 
-    results = scoring.evaluate_responses(references, references, scorers, InferenceConfig())
-    summary = scoring.summarise(results)
+    results = scoring.evaluate_responses([0.1, 0.9], references, references, scorers, config)
 
-    assert summary == {
+    assert scoring.summarise(results) == {
         "accuracy": 100.0, "precision": 100.0, "recall": 100.0, "f1": 100.0,
         "entailment": 100.0, "contradiction": 0.0, "neutral": 0.0,
         "meteor": 1.0, "bertscore": 1.0, "format_adherence": 100.0,
     }
+    assert scoring.confidence_intervals(results, config)["accuracy"] == [100.0, 100.0]
     with pytest.raises(ValueError):
-        scoring.evaluate_responses(references, references[:1], scorers, InferenceConfig())
-
-    scoring.save_predictions(tmp_path, references[::-1], references)
-    assert scoring.load_predictions(tmp_path) == (references[::-1], references)
+        scoring.evaluate_responses([0.1], references, references, scorers, config)
 
 
 def test_run_method_saves_then_reuses_predictions(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(scoring, "meteor", lambda p, r: 0.5)
+    monkeypatch.setattr(scoring, "meteor_scores", lambda p, r: [0.5] * len(p))
     calls = []
     monkeypatch.setattr(
         scoring, "generate_responses",
         lambda model, tok, prompts, config: calls.append(prompts) or (["Answer: no"] * len(prompts), 1.0),
     )
-
-    class BertScore:
-        def compute(self, predictions, references, model_type):
-            return {"f1": [0.5] * len(predictions)}
-
+    monkeypatch.setattr(scoring, "score_yes_no", lambda model, tok, prompts, config: [0.3] * len(prompts))
     scorers = scoring.Scorers(
-        judge=lambda texts: ["unclear"] * len(texts),
         nli_pipeline=lambda inputs: [{"label": "NEUTRAL", "score": 0.9} for _ in inputs],
-        bertscore=BertScore(),
+        bertscore=BertScore(0.5),
     )
-    args = (tmp_path, None, None, [FORMATTED, FORMATTED], BASELINE_PROMPT, scorers, InferenceConfig())
+    args = (tmp_path, None, None, [FORMATTED, FORMATTED], BASELINE_PROMPT, scorers,
+            InferenceConfig(bootstrap_samples=50))
 
     first = scoring.run_method(*args, method="baseline")
     second = scoring.run_method(*args, method="baseline")
 
     assert len(calls) == 1  # second run reused predictions.jsonl
-    assert first == second and first["accuracy"] == 100.0  # reference answer is "no"
+    assert first == second == scoring.load_summary(tmp_path)
+    assert first["accuracy"] == 100.0  # P(yes) 0.3 -> "no", the reference answer
+    assert scoring.load_predictions(tmp_path)["yes_probability"].tolist() == pytest.approx([0.3, 0.3])
     record = (tmp_path / "results.json").read_text()
-    assert '"method": "baseline"' in record and '"seed": 42' in record
+    assert '"method": "baseline"' in record and '"confidence_intervals"' in record
     assert '"gpu":' in record  # environment is recorded
-
-
-def test_compare_to_dissertation_uses_tolerances(capsys: pytest.CaptureFixture) -> None:
-    summary = dict(DISSERTATION_RESULTS["baseline"])
-    summary["accuracy"] += 3.4   # within ±3.5 points
-    summary["meteor"] += 0.02    # outside ±0.01
-
-    within = scoring.compare_to_dissertation(summary, "baseline")
-
-    assert within["accuracy"] and not within["meteor"]
-    assert sum(within.values()) == len(within) - 1
-    assert "DIFF" in capsys.readouterr().out

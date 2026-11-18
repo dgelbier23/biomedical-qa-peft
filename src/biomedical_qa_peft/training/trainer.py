@@ -98,7 +98,7 @@ def build_trainer(
         torch_empty_cache_steps=config.torch_empty_cache_steps,
         torch_compile=False,
         gradient_checkpointing=config.gradient_checkpointing,
-        group_by_length=config.group_by_length,
+        train_sampling_strategy="group_by_length" if config.group_by_length else "random",
         seed=config.seed,
     )
     return Trainer(
@@ -119,7 +119,7 @@ def train(trainer: Any, output_dir: Path, resume: bool = True) -> Any:
     while training (the original's setting), then restores the tokenizer's padding side.
 
     Prefix tuning with projection cannot resume, and cannot reload its best checkpoint
-    at the end, in transformers 4.47: checkpoints hold only the projected prefix, not
+    at the end (transformers 4.47 and 5): checkpoints hold only the projected prefix, not
     the MLP that produces it. Train it with resume=False. When reloading the best
     checkpoint fails this way, the final weights are kept, as in the original run.
     """
@@ -134,7 +134,9 @@ def train(trainer: Any, output_dir: Path, resume: bool = True) -> Any:
         trainer.train(resume_from_checkpoint=str(checkpoints[-1]) if checkpoints else None)
     except RuntimeError as error:
         peft_config = getattr(trainer.model, "active_peft_config", None)
-        if checkpoints or not getattr(peft_config, "is_prompt_learning", False) or "size mismatch" not in str(error):
+        # transformers 5 wraps the size-mismatch error in its own message.
+        message = f"{error} {error.__cause__}"
+        if checkpoints or not getattr(peft_config, "is_prompt_learning", False) or "size mismatch" not in message:
             raise
         print(
             f"Could not reload the best checkpoint ({trainer.state.best_model_checkpoint}, "

@@ -1,4 +1,4 @@
-"""Inference and evaluation settings, prompts, and the dissertation's reported results.
+"""Inference and evaluation settings, and the system prompts.
 
 Prompts are copied exactly from the original code, including leading and trailing
 spaces. Candidates 1 and 2 end a line with a space, written as \x20 so editors
@@ -15,8 +15,8 @@ Simplified Answer: {yes or no}
 Detailed Answer: {answer explanation}
 """
 
-# Prompt search: round 1 (candidates 1-3) and round 2 (candidates 4-5), each on the
-# first 100 test rows.
+# Candidates for the prompt-engineering method, from the dissertation's prompt search.
+# notebooks/03_prompt_search.ipynb picks one on the validation split.
 CANDIDATE_PROMPTS = (
     """You are a biomedical AI assistant answering academic questions.
 Your response format is:
@@ -113,75 +113,24 @@ Be concise, accurate, and consistent in structure across all
 responses.""",
 )
 
-# The prompt chosen for the prompt-engineering method: candidate 5 with a leading space.
-OPTIMISED_PROMPT = " " + CANDIDATE_PROMPTS[4]
-
-# System prompt for the yes/no judge used when the regex finds no short answer.
-# The missing space before "Extract" is in the original.
-JUDGE_PROMPT = (
-    "Analyze the given text carefully. "
-    "The text provided is a direct response to a question. Your task is to assess "
-    "whether the overall response to the question was 'Yes' or 'No'."
-    "Extract only an explicitly stated answer: Yes, No, or Unclear. "
-    "Do NOT explain or provide reasoning. "
-    "Do NOT interpret missing or ambiguous information: answer 'Unclear' if unsure. "
-    "Respond with one single word and nothing else. "
-    "Inaccurate or verbose outputs will be treated as incorrect."
-)
-
 
 @dataclass(frozen=True)
 class InferenceConfig:
     model_name: str = DataConfig.tokenizer_name
     model_revision: str = DataConfig.tokenizer_revision
     pad_token: str = "<|pad|>"
-    # Decoding settings from the original. Sampling was on through Llama's own
-    # generation_config; here it is explicit. no_repeat_ngram_size=2 bans the second
-    # "Answer:", so outputs can never match the required format (fixed in a later stage).
+    # Long answers: greedy decoding, so a run is repeatable. The dissertation sampled
+    # (temperature 0.7) with no_repeat_ngram_size=2, which banned the second "Answer:"
+    # and made the required format impossible. notebooks/03_prompt_search.ipynb checks
+    # repetition_penalty (1.0 or the original 1.2) on validation rows.
     max_new_tokens: int = 150
-    do_sample: bool = True
-    temperature: float = 0.7
-    top_k: int = 50
-    top_p: float = 0.95
     repetition_penalty: float = 1.2
-    no_repeat_ngram_size: int = 2
-    # New: the original sampling was unseeded, so it cannot be repeated exactly.
+    # Seeds the added pad token's embedding (see inference.load_base_model).
     seed: int = 42
-    # Throughput settings from the original.
     batch_size: int = 64
     num_workers: int = 4
-    # Scorers.
-    judge_batch_size: int = 16
     nli_model: str = "FacebookAI/roberta-large-mnli"
     nli_batch_size: int = 16
     bertscore_model: str = "distilbert-base-uncased"
-
-
-# Read from the result figures in the original Main_Inference_comparison.ipynb
-# (1,000 test rows, one unseeded run each). Percentages are 0-100.
-DISSERTATION_RESULTS = {
-    "baseline": {
-        "accuracy": 82.60, "precision": 84.25, "recall": 82.60, "f1": 82.45,
-        "entailment": 16.6, "contradiction": 9.5, "neutral": 73.9,
-        "meteor": 0.23241, "bertscore": 0.78310, "format_adherence": 0.0,
-    },
-    "prompt_engineering": {
-        "accuracy": 76.50, "precision": 77.08, "recall": 76.50, "f1": 76.65,
-        "entailment": 19.6, "contradiction": 17.9, "neutral": 62.5,
-        "meteor": 0.24394, "bertscore": 0.77747, "format_adherence": 0.0,
-    },
-    "prefix_tuning": {
-        "accuracy": 69.90, "precision": 71.49, "recall": 69.90, "f1": 70.33,
-        "entailment": 6.6, "contradiction": 26.9, "neutral": 66.5,
-        "meteor": 0.23649, "bertscore": 0.78555, "format_adherence": 0.0,
-    },
-    "lora": {
-        "accuracy": 65.50, "precision": 67.71, "recall": 65.50, "f1": 65.62,
-        "entailment": 5.3, "contradiction": 24.2, "neutral": 70.5,
-        "meteor": 0.23118, "bertscore": 0.78820, "format_adherence": 0.0,
-    },
-}
-
-# Agreed tolerance for a sampled re-run to count as reproducing a result:
-# about the 95% range between two runs of 1,000 rows.
-TOLERANCES = {"percent": 3.5, "meteor": 0.01, "bertscore": 0.01}
+    # 95% confidence intervals: resamples of the test rows.
+    bootstrap_samples: int = 1000

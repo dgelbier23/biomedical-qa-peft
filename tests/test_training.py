@@ -1,4 +1,4 @@
-"""CPU tests with a tiny random Llama and an in-memory tokenizer: nothing is downloaded."""
+"""CPU tests of training with the tiny Llama and tokenizer from conftest.py."""
 
 import json
 from dataclasses import replace
@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 import torch
+
+from conftest import HEADS, HIDDEN, KV_HEADS, LAYERS
 
 from biomedical_qa_peft.data.config import SYSTEM_PROMPT
 from biomedical_qa_peft.evaluation.config import BASELINE_PROMPT
@@ -20,34 +22,6 @@ from biomedical_qa_peft.training.trainer import (
     run_training,
     train,
 )
-
-WORDS = "is the drug safe yes no answer it was tested in mice".split()
-LAYERS, HIDDEN, HEADS, KV_HEADS = 2, 64, 4, 2
-
-
-@pytest.fixture
-def tokenizer():
-    from tokenizers import Tokenizer, models, pre_tokenizers
-    from transformers import PreTrainedTokenizerFast
-
-    vocab = {"<pad>": 0, "<unk>": 1, "<s>": 2, **{w: i + 3 for i, w in enumerate(WORDS)}}
-    tok = Tokenizer(models.WordLevel(vocab, unk_token="<unk>"))
-    tok.pre_tokenizer = pre_tokenizers.Whitespace()
-    return PreTrainedTokenizerFast(
-        tokenizer_object=tok, pad_token="<pad>", unk_token="<unk>", bos_token="<s>"
-    )
-
-
-def tiny_llama():
-    from transformers import LlamaConfig, LlamaForCausalLM
-
-    torch.manual_seed(0)
-    return LlamaForCausalLM(LlamaConfig(
-        vocab_size=len(WORDS) + 3, hidden_size=HIDDEN, intermediate_size=128,
-        num_hidden_layers=LAYERS, num_attention_heads=HEADS, num_key_value_heads=KV_HEADS,
-        max_position_embeddings=128, pad_token_id=0,
-    ))
-
 
 def test_build_training_text_swaps_system_prompt_and_keeps_answer() -> None:
     formatted = (
@@ -66,7 +40,7 @@ def test_build_training_text_swaps_system_prompt_and_keeps_answer() -> None:
     assert build_training_text(formatted, BASELINE_PROMPT, keep_bos=False) == rest
 
 
-def test_prefix_trains_the_projection_mlp_but_saves_only_its_output() -> None:
+def test_prefix_trains_the_projection_mlp_but_saves_only_its_output(tiny_llama) -> None:
     n = PrefixConfig().num_virtual_tokens
     kv_dim = HIDDEN // HEADS * KV_HEADS  # PEFT sizes the prefix to the key/value heads
     prefix_values = n * LAYERS * 2 * kv_dim
@@ -83,7 +57,7 @@ def test_prefix_trains_the_projection_mlp_but_saves_only_its_output() -> None:
     assert sum(p.numel() for p in direct.parameters() if p.requires_grad) == prefix_values
 
 
-def test_lora_trains_query_and_value_adapters() -> None:
+def test_lora_trains_query_and_value_adapters(tiny_llama) -> None:
     r, kv_dim = LoraSettings().r, HIDDEN // HEADS * KV_HEADS
     model = add_lora(tiny_llama(), LoraSettings())
 
@@ -95,7 +69,7 @@ def test_lora_trains_query_and_value_adapters() -> None:
     assert model.config.use_cache is False
 
 
-def test_collator_masks_only_padding_in_labels(tokenizer, tmp_path: Path) -> None:
+def test_collator_masks_only_padding_in_labels(tiny_llama, tokenizer, tmp_path: Path) -> None:
     tokenizer.padding_side = "right"
     dataset = make_dataset(["is the drug safe", "yes"], tokenizer)
     trainer = build_trainer(tiny_llama(), tokenizer, dataset, dataset,
@@ -115,7 +89,7 @@ TEXTS = ["is the drug safe yes", "it was tested in mice no", "is it safe yes", "
 
 
 def test_projected_prefix_trains_keeps_final_weights_and_refuses_to_resume(
-    tokenizer, tmp_path: Path, capsys: pytest.CaptureFixture
+    tiny_llama, tokenizer, tmp_path: Path, capsys: pytest.CaptureFixture
 ) -> None:
     dataset = make_dataset(TEXTS, tokenizer)
     tokenizer.padding_side = "left"
@@ -137,7 +111,7 @@ def test_projected_prefix_trains_keeps_final_weights_and_refuses_to_resume(
 
 
 def test_run_training_saves_adapter_curves_and_summary(
-    tokenizer, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tiny_llama, tokenizer, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import matplotlib.pyplot as plt
     import pandas as pd
@@ -162,7 +136,7 @@ def test_run_training_saves_adapter_curves_and_summary(
 
 
 def test_lora_reloads_best_checkpoint_and_resumes(
-    tokenizer, tmp_path: Path, capsys: pytest.CaptureFixture
+    tiny_llama, tokenizer, tmp_path: Path, capsys: pytest.CaptureFixture
 ) -> None:
     dataset = make_dataset(TEXTS, tokenizer)
     states = []

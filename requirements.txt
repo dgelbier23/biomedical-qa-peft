@@ -4,13 +4,13 @@
 #
 # torch is pinned to Colab's preinstalled version, so local tests exercise the same
 # PyTorch API that Colab runs (notebooks/01_environment_check.ipynb prints it).
-# The Hugging Face stack is pinned to the dissertation's versions, matching
-# requirements-colab.txt, so local preprocessing and metrics match the original.
+# The Hugging Face stack matches requirements-colab.txt.
 torch==2.11.0
-transformers==4.47.0
-peft==0.15.2
-datasets==3.5.1
-evaluate==0.4.3
+transformers==5.23.0
+peft==0.21.3
+accelerate==1.16.0
+datasets==5.2.0
+evaluate==0.4.6
 nltk==3.9.1
 scikit-learn==1.6.1
 numpy

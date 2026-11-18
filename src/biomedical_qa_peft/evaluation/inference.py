@@ -1,4 +1,4 @@
-"""Model loading, prompt building and batched generation, ported from the dissertation."""
+"""Model loading, prompt building, yes/no scoring and batched generation."""
 
 import re
 import time
@@ -10,7 +10,6 @@ from tqdm import tqdm
 
 from biomedical_qa_peft.data.config import SYSTEM_PROMPT
 from biomedical_qa_peft.evaluation.config import InferenceConfig
-from biomedical_qa_peft.runtime.device import set_seed
 
 ASSISTANT_TAG = "<|start_header_id|>assistant<|end_header_id|>"
 END_TAG = "<|eot_id|>"
@@ -41,7 +40,7 @@ def load_base_model(config: InferenceConfig) -> tuple[Any, Any]:
             bnb_4bit_quant_type="nf4",
             bnb_4bit_compute_dtype=torch.float16,
         ),
-        torch_dtype=torch.float16,
+        dtype=torch.float16,
         device_map="auto",
         attn_implementation="sdpa",
     )
@@ -81,22 +80,20 @@ def extract_response(decoded: str) -> str:
     return decoded[start:decoded.find(END_TAG, start)].strip()
 
 
-def generate_responses(
-    model: Any, tokenizer: Any, prompts: list[str], config: InferenceConfig
-) -> tuple[list[str], float]:
-    """Generate one answer per prompt, in order. Returns (answers, seconds taken).
+# The answer's first token after "Simplified Answer:", in both capitalisations.
+ANSWER_PREFIX = "\nSimplified Answer:"
+YES_NO_WORDS = {"yes": (" yes", " Yes"), "no": (" no", " No")}
 
-    Seeds with config.seed first, so a run can be repeated.
-    """
-    from accelerate import Accelerator
+
+def _batches(tokenizer: Any, prompts: list[str], config: InferenceConfig) -> DataLoader:
+    """Tokenised prompts in order, padded per batch (left padding for generation)."""
     from transformers import DataCollatorWithPadding
 
-    set_seed(config.seed)
     encodings = [
         tokenizer(p, add_special_tokens=True, truncation=False, padding=False) for p in prompts
     ]
     workers = config.num_workers
-    loader = DataLoader(
+    return DataLoader(
         encodings,
         batch_size=config.batch_size,
         shuffle=False,
@@ -106,8 +103,50 @@ def generate_responses(
         persistent_workers=workers > 0,
         prefetch_factor=4 if workers > 0 else None,
     )
+
+
+def score_yes_no(
+    model: Any, tokenizer: Any, prompts: list[str], config: InferenceConfig
+) -> list[float]:
+    """P(yes) / (P(yes) + P(no)) for each prompt's short answer, in order.
+
+    Appends "Simplified Answer:" to each prompt and reads the next-token probabilities
+    of " yes"/" Yes" and " no"/" No": one forward pass, deterministic, no judge.
+    Needs left padding, so the last position of every row is its last real token.
+    """
+    if tokenizer.padding_side != "left":
+        raise ValueError("score_yes_no needs tokenizer.padding_side == 'left'")
+    ids = {}
+    for label, words in YES_NO_WORDS.items():
+        ids[label] = [tokenizer(w, add_special_tokens=False)["input_ids"] for w in words]
+        if any(len(i) != 1 for i in ids[label]):
+            raise ValueError(f"{words} must each be one token for this tokenizer")
+        ids[label] = [i[0] for i in ids[label]]
+
     model.eval()
-    model, loader = Accelerator().prepare(model, loader)
+    probabilities: list[float] = []
+    for batch in tqdm(_batches(tokenizer, [p + ANSWER_PREFIX for p in prompts], config),
+                      desc="Scoring yes/no"):
+        with torch.no_grad():
+            logits = model(
+                input_ids=batch["input_ids"].to(model.device),
+                attention_mask=batch["attention_mask"].to(model.device),
+                logits_to_keep=1,
+            ).logits[:, -1].float()
+        p = logits.softmax(-1)
+        yes, no = p[:, ids["yes"]].sum(-1), p[:, ids["no"]].sum(-1)
+        probabilities += (yes / (yes + no)).tolist()
+    return probabilities
+
+
+def generate_responses(
+    model: Any, tokenizer: Any, prompts: list[str], config: InferenceConfig
+) -> tuple[list[str], float]:
+    """Generate one answer per prompt greedily, in order. Returns (answers, seconds taken)."""
+    from accelerate import Accelerator
+
+    model.eval()
+    model, loader = Accelerator().prepare(model, _batches(tokenizer, prompts, config))
 
     responses: list[str] = []
     start = time.time()
@@ -117,12 +156,11 @@ def generate_responses(
                 input_ids=batch["input_ids"].to(model.device),
                 attention_mask=batch["attention_mask"].to(model.device),
                 max_new_tokens=config.max_new_tokens,
-                do_sample=config.do_sample,
-                temperature=config.temperature,
-                top_k=config.top_k,
-                top_p=config.top_p,
+                # Llama's generation_config samples by default; override all of it.
+                do_sample=False,
+                temperature=None,
+                top_p=None,
                 repetition_penalty=config.repetition_penalty,
-                no_repeat_ngram_size=config.no_repeat_ngram_size,
                 eos_token_id=tokenizer.eos_token_id,
                 pad_token_id=tokenizer.pad_token_id,
             )

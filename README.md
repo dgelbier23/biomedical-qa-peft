@@ -9,8 +9,8 @@ Fine-Tuning for Biomedical Research QA*.
 
 > **Status: migration in progress.** The original dissertation code is being ported
 > stage by stage. Behaviour is reproduced faithfully first, then improved.
-> So far, the data splits and the baseline and prompt-engineering results are
-> reproduced; prefix tuning and LoRA are next.
+> So far, the data splits and the baseline, prompt-engineering and prefix-tuning
+> results are reproduced; LoRA is next.
 
 ## Pipeline
 
@@ -50,13 +50,13 @@ Fine-Tuning for Biomedical Research QA*.
 ### Results (1,000 test rows)
 
 Each cell shows **dissertation → reproduced**. Reproduced runs use this code with
-seed 42 on an A100 GPU.
+seed 42: baseline and prompt engineering on an A100 GPU, prefix tuning on an L4.
 
 | Method | Accuracy | F1 | NLI entailment | METEOR | BERTScore |
 |---|---|---|---|---|---|
 | Baseline | 82.6% → 81.7% | 82.5% → 81.5% | 16.6% → 19.3% | 0.232 → 0.234 | 0.783 → 0.783 |
 | Prompt engineering | 76.5% → 74.9% | 76.7% → 74.8% | 19.6% → 16.2% | 0.244 → 0.244 | 0.777 → 0.779 |
-| Prefix tuning | 69.9% → *pending* | 70.3% → *pending* | 6.6% → *pending* | 0.236 → *pending* | 0.786 → *pending* |
+| Prefix tuning (retrained) | 69.9% → 71.3% | 70.3% → 70.9% | 6.6% → 6.6% | 0.236 → 0.249 | 0.786 → 0.789 |
 | LoRA | 65.5% → *pending* | 65.6% → *pending* | 5.3% → *pending* | 0.231 → *pending* | 0.788 → *pending* |
 
 The dissertation numbers come from single, unseeded sampling runs, so a re-run can only
@@ -73,6 +73,16 @@ match them within sampling noise. Before running anything, we agreed tolerances 
 - Short-answer scores came out about 1–2 points lower for both methods. That is within
   noise, but it could also be a small systematic shift from the different GPU or the
   newer bitsandbytes; one run cannot tell these apart.
+
+**Prefix tuning is reproduced (2026-11-18).**
+- Retraining follows the original run: best validation loss 1.527 at step 4,000, early
+  stop at step 4,500 (loss 1.531 vs 1.5305), with the same 179,387,392 trainable parameters.
+- The retrained adapter has 9 of 10 values within tolerance. METEOR is 0.012 higher
+  (0.2486 vs 0.2365), just outside ±0.01.
+- The original dissertation adapter, scored with this code, has all 10 values within
+  tolerance (accuracy 70.8%, F1 71.3%, entailment 6.5%, METEOR 0.232, BERTScore 0.786).
+- The main finding holds: prefix tuning scores about 10 points below the baseline on
+  accuracy, with the lowest entailment of the methods so far.
 
 ### Known issues (ported as-is, to be fixed after the faithful port)
 
@@ -158,7 +168,7 @@ Notebooks run locally (`.venv` kernel) or in Google Colab, unchanged.
 | `01_environment_check` | local or Colab | versions, device, output folder |
 | `02_prepare_data` | Colab (CPU is enough) | build the PubMedQA train/validation/test splits |
 | `03_baseline_prompt_engineering` | Colab (GPU) | baseline and prompt-engineered answers, scored; optional prompt search |
-| `04_prefix_tuning` | Colab (A100) | evaluate the original prefix adapter; retrain and evaluate |
+| `04_prefix_tuning` | Colab (L4 or A100; training ≈ 2 h on L4) | evaluate the original prefix adapter; retrain and evaluate |
 
 ## Reproducibility
 

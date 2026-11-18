@@ -10,8 +10,12 @@ from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_sc
 LABELS = {"no": 0, "yes": 1}
 NLI_LABELS = ("ENTAILMENT", "CONTRADICTION", "NEUTRAL")
 
+# Both labelled fields, in order, from the start; tolerates markdown bold, any case, and
+# braces copied from the prompt's "{yes or no}".
 _FORMAT = re.compile(
-    r"^\s*Simplified Answer:\s*(yes|no)\s*\n+\s*Detailed Answer:\s*(.*?)\s*$", re.DOTALL
+    r"^\s*\**Simplified Answer:?\**:?[ \t]*\{?(yes|no)\}?\.?[ \t]*\n+"
+    r"\s*\**Detailed Answer:?\**:?(.*\w.*)$",
+    re.DOTALL | re.IGNORECASE,
 )
 _SHORT_ANSWER = re.compile(
     r"(?:Simplified\s+)?Answer(?:\s*is|\s*:)?\s*(yes|no|unclear)\b", re.IGNORECASE
@@ -19,7 +23,8 @@ _SHORT_ANSWER = re.compile(
 
 
 def has_valid_format(output: str) -> bool:
-    """True for "Simplified Answer: yes|no" then "Detailed Answer: ..." on a new line."""
+    """True for "Simplified Answer: yes|no" then a non-empty "Detailed Answer: ..." on a
+    new line (style variations allowed, see _FORMAT)."""
     return bool(_FORMAT.match(output.strip()))
 
 

@@ -105,10 +105,31 @@ def test_generate_responses_keeps_prompt_order_across_batches() -> None:
     assert seconds >= 0
 
 
-def test_format_check_accepts_reference_layout_only() -> None:
-    assert has_valid_format(REFERENCE)
+@pytest.mark.parametrize("answer", [
+    REFERENCE,
+    # Real greedy answers from the validation check (repetition_penalty 1.2 and 1.0):
+    "**Simplified Answer:** Yes\n\n**Detailed Answer:** This study found an association.",
+    "Simplified Answer: {yes}\nDetailed Answer: The study found associations.",
+    "Simplified Answer: No.\nDetailed Answer: It did not.",
+])
+def test_format_check_accepts_both_fields_in_any_style(answer: str) -> None:
+    assert has_valid_format(answer)
+
+
+@pytest.mark.parametrize("answer", [
     # What the dissertation's no_repeat_ngram_size=2 forced the models to write:
-    assert not has_valid_format("Simplified Answer : yes\nDetailedAnswer: Because.")
+    "Simplified Answer : yes\nDetailedAnswer: Because.",
+    "Detailed Answer: Because.\nSimplified Answer: yes",  # wrong order
+    "Simplified Answer: maybe\nDetailed Answer: Unclear.",  # not yes/no
+    "Simplified Answer: yes\nDetailed Answer:",  # empty explanation
+    "Simplified Answer: yes, because it worked.",  # no detailed field
+    "The answer is yes.\nSimplified Answer: yes\nDetailed Answer: Because.",  # not at the start
+])
+def test_format_check_rejects_missing_or_misordered_fields(answer: str) -> None:
+    assert not has_valid_format(answer)
+
+
+def test_format_stats_counts_valid_answers() -> None:
     assert format_stats([REFERENCE, "yes"]) == {
         "total_outputs": 2, "valid_format_count": 1,
         "invalid_format_count": 1, "valid_format_percentage": 50.0,

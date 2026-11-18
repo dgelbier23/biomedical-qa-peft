@@ -14,19 +14,25 @@ from biomedical_qa_peft.runtime.env import describe_environment
 from biomedical_qa_peft.training.config import TrainingConfig
 
 _SYSTEM_TURN = re.compile(
-    re.escape("<|start_header_id|>system<|end_header_id|>") + r"\s*" + re.escape(SYSTEM_PROMPT)
+    r"(<\|begin_of_text\|>)?"
+    + re.escape("<|start_header_id|>system<|end_header_id|>")
+    + r"\s*"
+    + re.escape(SYSTEM_PROMPT)
 )
 
 
-def build_training_text(formatted_text: str, system_prompt: str) -> str:
+def build_training_text(formatted_text: str, system_prompt: str, keep_bos: bool = True) -> str:
     """The full conversation (answer included) with the system prompt replaced.
 
-    As in the original, <|begin_of_text|> is kept and the tokenizer adds a second one,
-    so training text starts with two, while test prompts (evaluation.inference) start
-    with one.
+    The tokenizer adds <|begin_of_text|> itself. With keep_bos (the original prefix
+    tuning), the dataset's one is kept too, so the text starts with two; without it
+    (the original LoRA), with one, like test prompts (evaluation.inference).
     """
-    text = _SYSTEM_TURN.sub(f"<|start_header_id|>system<|end_header_id|> {system_prompt}", formatted_text)
-    return text.replace("<|pad|>", "")
+    def system_turn(match: re.Match) -> str:
+        bos = (match.group(1) or "") if keep_bos else ""
+        return f"{bos}<|start_header_id|>system<|end_header_id|> {system_prompt}"
+
+    return _SYSTEM_TURN.sub(system_turn, formatted_text).replace("<|pad|>", "")
 
 
 def make_dataset(texts: list[str], tokenizer: Any) -> Any:
@@ -91,6 +97,7 @@ def build_trainer(
         report_to="none",
         torch_empty_cache_steps=config.torch_empty_cache_steps,
         torch_compile=False,
+        gradient_checkpointing=config.gradient_checkpointing,
         group_by_length=config.group_by_length,
         seed=config.seed,
     )
@@ -147,16 +154,19 @@ def run_training(
     system_prompt: str,
     config: TrainingConfig,
     resume: bool = True,
+    keep_bos: bool = True,
 ) -> dict[str, Any]:
     """Train on data_dir's train/validation splits and save everything under run_dir.
 
-    Saves checkpoints/, adapter/ (the final weights), the two loss-curve figures and
-    training.json (summary, config, environment and full log history). Returns the summary.
+    Saves checkpoints/, adapter/ (the best checkpoint's weights where they can be
+    reloaded, otherwise the final ones), the two loss-curve figures and training.json
+    (summary, config, environment and full log history). Returns the summary. After a
+    resume, training_minutes covers only the resumed part.
     """
     datasets = {
         split: make_dataset(
             [
-                build_training_text(text, system_prompt)
+                build_training_text(text, system_prompt, keep_bos)
                 for text in pd.read_json(data_dir / f"{split}.jsonl", lines=True)["formatted_text"]
             ],
             tokenizer,

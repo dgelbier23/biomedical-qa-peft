@@ -9,7 +9,8 @@ import torch
 
 from biomedical_qa_peft.data.config import SYSTEM_PROMPT
 from biomedical_qa_peft.evaluation.config import BASELINE_PROMPT
-from biomedical_qa_peft.training.config import PrefixConfig, TrainingConfig
+from biomedical_qa_peft.training.config import LoraSettings, PrefixConfig, TrainingConfig
+from biomedical_qa_peft.training.lora import add_lora
 from biomedical_qa_peft.training.prefix_tuning import add_prefix
 from biomedical_qa_peft.training.trainer import (
     build_trainer,
@@ -55,14 +56,14 @@ def test_build_training_text_swaps_system_prompt_and_keeps_answer() -> None:
         "<|start_header_id|>assistant<|end_header_id|>\nSimplified Answer: no<|eot_id|><|pad|>"
     )
 
-    text = build_training_text(formatted, BASELINE_PROMPT)
-
-    # <|begin_of_text|> stays (the tokenizer adds a second one), unlike test prompts.
-    assert text == (
-        "<|begin_of_text|><|start_header_id|>system<|end_header_id|> "
-        f"{BASELINE_PROMPT}<|eot_id|><|start_header_id|>user<|end_header_id|>\nQuestion: q?<|eot_id|>"
+    rest = (
+        f"<|start_header_id|>system<|end_header_id|> {BASELINE_PROMPT}<|eot_id|>"
+        "<|start_header_id|>user<|end_header_id|>\nQuestion: q?<|eot_id|>"
         "<|start_header_id|>assistant<|end_header_id|>\nSimplified Answer: no<|eot_id|>"
     )
+    # Prefix tuning keeps <|begin_of_text|> (the tokenizer adds a second); LoRA drops it.
+    assert build_training_text(formatted, BASELINE_PROMPT) == "<|begin_of_text|>" + rest
+    assert build_training_text(formatted, BASELINE_PROMPT, keep_bos=False) == rest
 
 
 def test_prefix_trains_the_projection_mlp_but_saves_only_its_output() -> None:
@@ -80,6 +81,18 @@ def test_prefix_trains_the_projection_mlp_but_saves_only_its_output() -> None:
 
     direct = add_prefix(tiny_llama(), PrefixConfig(prefix_projection=False))
     assert sum(p.numel() for p in direct.parameters() if p.requires_grad) == prefix_values
+
+
+def test_lora_trains_query_and_value_adapters() -> None:
+    r, kv_dim = LoraSettings().r, HIDDEN // HEADS * KV_HEADS
+    model = add_lora(tiny_llama(), LoraSettings())
+
+    trainable = {name: p.numel() for name, p in model.named_parameters() if p.requires_grad}
+    # A (r x in) + B (out x r) per adapted projection; q: hidden -> hidden, v: hidden -> kv_dim.
+    # For Llama 3.2 3B this is 2,293,760.
+    assert sum(trainable.values()) == LAYERS * (r * 2 * HIDDEN + r * (HIDDEN + kv_dim))
+    assert all("lora_" in name and ("q_proj" in name or "v_proj" in name) for name in trainable)
+    assert model.config.use_cache is False
 
 
 def test_collator_masks_only_padding_in_labels(tokenizer, tmp_path: Path) -> None:
@@ -148,16 +161,17 @@ def test_run_training_saves_adapter_curves_and_summary(
     assert record["training_config"]["learning_rate"] == 2e-5 and record["log_history"]
 
 
-def test_unprojected_adapter_resumes_from_checkpoint(
+def test_lora_reloads_best_checkpoint_and_resumes(
     tokenizer, tmp_path: Path, capsys: pytest.CaptureFixture
 ) -> None:
     dataset = make_dataset(TEXTS, tokenizer)
     states = []
     for _ in range(2):
-        model = add_prefix(tiny_llama(), PrefixConfig(prefix_projection=False))
+        model = add_lora(tiny_llama(), LoraSettings())
         states.append(train(build_trainer(model, tokenizer, dataset, dataset, CONFIG, tmp_path), tmp_path))
 
-    assert "Resuming from" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "Could not reload" not in out and "Resuming from" in out
     # The second run resumed at the final checkpoint, so it trained no further steps.
     assert states[1].global_step == 2
     assert states[1].log_history[:-1] == states[0].log_history[:-1]  # per-step logs restored

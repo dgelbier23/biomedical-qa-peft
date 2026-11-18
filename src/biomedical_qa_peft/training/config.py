@@ -1,13 +1,15 @@
 """Training settings. Defaults are what the dissertation actually ran, read from its code
 and saved training_args.bin; several differ from the report (see the README)."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from biomedical_qa_peft.evaluation.config import BASELINE_PROMPT
 
 
 @dataclass(frozen=True)
 class TrainingConfig:
+    """Prefix-tuning settings; LORA_TRAINING below lists LoRA's differences."""
+
     num_train_epochs: float = 3
     # 2 x 2 = effective batch 4, as in the saved training_args.bin (the notebook showed 4).
     per_device_train_batch_size: int = 2
@@ -30,17 +32,28 @@ class TrainingConfig:
     dataloader_num_workers: int = 2
     group_by_length: bool = True
     torch_empty_cache_steps: int = 4
+    gradient_checkpointing: bool = False
     seed: int = 42
 
 
-# The original runs, read from their saved loss-curve figures (losses to about ±0.001).
-# The prefix run early-stopped at step 4500; its saved adapter is the step-4500 weights,
-# because reloading the best checkpoint fails (see trainer.train). Training time was on an
-# RTX 4000 Ada.
+# LoRA's saved training_args.bin: 4 x 2 = effective batch 8 (1,000 steps per epoch),
+# with gradient checkpointing; everything else as for prefix tuning.
+LORA_TRAINING = replace(TrainingConfig(), per_device_train_batch_size=4, gradient_checkpointing=True)
+
+
+# The original runs. Prefix tuning: read from its loss-curve figures (to about ±0.001); it
+# early-stopped at step 4500 and saved those weights, because reloading the best checkpoint
+# fails (see trainer.train). LoRA: from its checkpoint-3000 trainer_state.json; it ran all
+# 3 epochs and was still improving, so best = final. Times are on an RTX 4000 Ada (LoRA's
+# from the report).
 DISSERTATION_TRAINING = {
     "prefix_tuning": {
         "best_step": 4000, "best_eval_loss": 1.527,
         "final_step": 4500, "final_eval_loss": 1.5305, "training_minutes": 96.40,
+    },
+    "lora": {
+        "best_step": 3000, "best_eval_loss": 1.5766,
+        "final_step": 3000, "final_eval_loss": 1.5766, "training_minutes": 162.6,
     },
 }
 
@@ -53,3 +66,16 @@ class PrefixConfig:
     prefix_projection: bool = True
     # Replaces the dataset's system prompt in the training text.
     system_prompt: str = BASELINE_PROMPT
+
+
+@dataclass(frozen=True)
+class LoraSettings:
+    # Rank-8 adapters on the attention query and value projections.
+    r: int = 8
+    lora_alpha: int = 16
+    lora_dropout: float = 0.05
+    target_modules: tuple[str, ...] = ("q_proj", "v_proj")
+    system_prompt: str = BASELINE_PROMPT
+    # The original LoRA training text drops the dataset's <|begin_of_text|> (prefix tuning
+    # keeps it), so it starts with one, added by the tokenizer.
+    keep_bos: bool = False

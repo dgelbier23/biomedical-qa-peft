@@ -7,9 +7,9 @@ prefix tuning and LoRA, and scored with a custom evaluation framework.
 A clean, reproducible rebuild of my BSc dissertation, *Comparing Parameter-Efficient
 Fine-Tuning for Biomedical Research QA*.
 
-> **Status: improving the evaluation.** The original dissertation code was ported and its
-> results reproduced (git tag `v1-reproduction`). The evaluation fixes (v2) are in place;
-> the training fixes are next.
+> **Status: improving the method.** The original dissertation code was ported and its
+> results reproduced (git tag `v1-reproduction`). The evaluation and training fixes (v2)
+> are in place; v2 results are next.
 
 ## Pipeline
 
@@ -36,19 +36,27 @@ Fine-Tuning for Biomedical Research QA*.
    - LoRA: rank-8 adapters on the attention query and value projections of the 4-bit
      quantised base model (PEFT + bitsandbytes). That trains and saves 2,293,760
      parameters (about 0.07%).
-3. **Evaluation** (`biomedical_qa_peft.evaluation`, settings in `InferenceConfig`): every
+3. **Training** (`biomedical_qa_peft.training`, settings in `training/config.py`): the
+   dissertation's hyperparameters. Each training example is exactly the test prompt
+   followed by the reference answer, the loss covers only the answer, and the adapter
+   kept is the checkpoint with the lowest validation loss.
+4. **Evaluation** (`biomedical_qa_peft.evaluation`, settings in `InferenceConfig`): every
    method answers the same 1,000 test rows with the same settings, in one session
    (`notebooks/06_evaluate.ipynb`). Each answer is scored on:
    - **Short answer**: yes/no read from the model's next-token probabilities after
      "Simplified Answer:". Deterministic, and no LLM judge. Reported as accuracy and
-     weighted precision/recall/F1.
-   - **Long answer**: generated greedily, then scored with NLI (RoBERTa-large-MNLI, the
-     reference as premise and the answer as hypothesis), METEOR and BERTScore.
-   - **Format adherence**: "Simplified Answer: yes/no" followed by "Detailed Answer: ...".
+     weighted precision/recall/F1, with paired McNemar tests against the baseline.
+   - **Written accuracy**: how often the yes/no the model writes in its answer matches
+     the reference.
+   - **Long answer**: generated greedily. The explanation after "Detailed Answer" is
+     scored with NLI (RoBERTa-large-MNLI, the reference as premise and the answer as
+     hypothesis), METEOR and BERTScore.
+   - **Format adherence**: "Simplified Answer: yes/no" followed by "Detailed Answer: ...",
+     in any style (markdown bold, capitals or braces).
 
-   The prompt-engineering prompt and the repetition penalty are chosen on the validation
-   split (`notebooks/03_prompt_search.ipynb`), never on test rows. Accuracy, F1, entailment, METEOR and
-   BERTScore get 95% bootstrap confidence intervals over the test rows. Predictions and `results.json`
+   The prompt-engineering prompt is chosen on the validation split
+   (`notebooks/03_prompt_search.ipynb`), never on test rows. The main metrics get 95%
+   bootstrap confidence intervals over the test rows. Predictions and `results.json`
    (summary, intervals, prompt, decoding settings, environment) are saved for every run.
 
 ### Results (1,000 test rows)
@@ -102,12 +110,11 @@ match them within sampling noise. Before running anything, we agreed tolerances 
 
 ### Known issues in the dissertation's method
 
-The v1 reproduction keeps these on purpose. Issues 1, 3, 4, 5 and 6 are fixed in the v2
-evaluation; issues 2, 7, 8 and 9 are fixed in training next.
+The v1 reproduction keeps these on purpose. All are fixed in v2.
 
 1. *(Fixed in v2.)* **The required answer format is impossible.** `no_repeat_ngram_size=2` bans the second
    "Answer:", so format adherence is 0% for every method.
-2. **Training and test inputs differ slightly.** Prefix tuning and LoRA are both trained
+2. *(Fixed in v2.)* **Training and test inputs differ slightly.** Prefix tuning and LoRA are both trained
    and tested with the baseline prompt. However, prefix tuning's training text starts
    with two `<|begin_of_text|>` tokens (the text keeps one and the tokenizer adds
    another), while LoRA's training text and all test prompts start with one.
@@ -121,17 +128,27 @@ evaluation; issues 2, 7, 8 and 9 are fixed in training next.
    search, the chosen prompt (candidate 5) scored 72% while candidates 1 and 2 scored 75%.
 6. *(Fixed in v2.)* **The prompt was chosen on test rows.** The search used the first 100 *test* rows, so
    test data influenced the method being tested. It should use the validation split.
-7. **Prefix tuning keeps its final weights, not its best checkpoint.** Training stops
+7. *(Fixed in v2.)* **Prefix tuning keeps its final weights, not its best checkpoint.** Training stops
    early when validation loss stops improving. It should then reload the best checkpoint
    (step 4,000 in the original), but with these library versions that reload fails for
    a prefix generated by an MLP. So the step-4,500 weights are saved instead, and training
    cannot resume after a disconnect.
-8. **The loss covers the whole conversation.** It includes the system prompt and the
+8. *(Fixed in v2.)* **The loss covers the whole conversation.** It includes the system prompt and the
    question, not just the answer.
-9. **Logged training loss is twice the true value.** In transformers 4.47, with gradient
+9. *(Fixed in v2.)* **Logged training loss is twice the true value.** In transformers 4.47, with gradient
    accumulation, the logged loss sums the 2 micro-batches instead of averaging them. The
    gradients are correct, and validation loss is unaffected; only the training-loss
    logs and figures are doubled.
+10. *(Fixed in v2.)* **Written answers lean towards "yes".** The trained adapters wrote
+    "yes" in 79-86% of answers on a 50/50 test set, although their yes/no probabilities
+    were about 90% accurate. The likely cause is `repetition_penalty=1.2`, which
+    penalises every token already in the prompt: the prompt's `{yes or no}` contains
+    " no" but not " yes", and the adapters answer in lowercase. v2 decodes greedily with
+    no penalty.
+11. *(Fixed in v2.)* **NLI mostly scores the yes/no line.** Whole answers start with
+    "Simplified Answer: yes/no", and a wrong yes/no reads as a contradiction (60-100% of
+    such answers) whatever the explanation says. v2 runs NLI, METEOR and BERTScore on the
+    explanation only; the yes/no is scored by accuracy.
 
 ## Repository layout
 
@@ -192,7 +209,7 @@ Notebooks run locally (`.venv` kernel) or in Google Colab, unchanged.
 |---|---|---|
 | `01_environment_check` | local or Colab | versions, device, output folder |
 | `02_prepare_data` | Colab (CPU is enough) | build the PubMedQA train/validation/test splits |
-| `03_prompt_search` | Colab (GPU, ≈ 10 min) | choose the prompt-engineering prompt and repetition penalty on validation |
+| `03_prompt_search` | Colab (GPU, ≈ 5 min) | choose the prompt-engineering prompt on validation |
 | `04_prefix_tuning` | Colab (GPU; ≈ 2 h on L4) | train the prefix |
 | `05_lora` | Colab (GPU; ≈ 3 h on L4, resumable) | train the LoRA adapters |
 | `06_evaluate` | Colab (GPU, ≈ 30-40 min on A100) | evaluate all four methods on the test split, compare with v1 |

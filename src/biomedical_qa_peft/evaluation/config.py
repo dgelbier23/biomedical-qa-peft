@@ -121,10 +121,11 @@ class InferenceConfig:
     pad_token: str = "<|pad|>"
     # Long answers: greedy decoding, so a run is repeatable. The dissertation sampled
     # (temperature 0.7) with no_repeat_ngram_size=2, which banned the second "Answer:"
-    # and made the required format impossible. notebooks/03_prompt_search.ipynb checks
-    # repetition_penalty (1.0 or the original 1.2) on validation rows.
+    # and made the required format impossible. Its repetition_penalty=1.2 is also off:
+    # it penalises " no", which the prompt's "{yes or no}" contains, but not " yes", so
+    # models that write lowercase answers wrote "yes" far too often.
     max_new_tokens: int = 150
-    repetition_penalty: float = 1.2
+    repetition_penalty: float = 1.0
     # Seeds the added pad token's embedding (see inference.load_base_model).
     seed: int = 42
     batch_size: int = 64

@@ -1,7 +1,7 @@
 """Training text, datasets and the Hugging Face Trainer setup shared by prefix tuning and LoRA."""
 
 import json
-import re
+import shutil
 import time
 from dataclasses import asdict
 from pathlib import Path
@@ -9,42 +9,38 @@ from typing import Any
 
 import pandas as pd
 
-from biomedical_qa_peft.data.config import SYSTEM_PROMPT
+from biomedical_qa_peft.evaluation.inference import END_TAG, build_prompt
 from biomedical_qa_peft.runtime.env import describe_environment
 from biomedical_qa_peft.training.config import TrainingConfig
 
-_SYSTEM_TURN = re.compile(
-    r"(<\|begin_of_text\|>)?"
-    + re.escape("<|start_header_id|>system<|end_header_id|>")
-    + r"\s*"
-    + re.escape(SYSTEM_PROMPT)
-)
+ADAPTER_FILES = ("adapter_config.json", "adapter_model.safetensors")
 
 
-def build_training_text(formatted_text: str, system_prompt: str, keep_bos: bool = True) -> str:
-    """The full conversation (answer included) with the system prompt replaced.
-
-    The tokenizer adds <|begin_of_text|> itself. With keep_bos (the original prefix
-    tuning), the dataset's one is kept too, so the text starts with two; without it
-    (the original LoRA), with one, like test prompts (evaluation.inference).
-    """
-    def system_turn(match: re.Match) -> str:
-        bos = (match.group(1) or "") if keep_bos else ""
-        return f"{bos}<|start_header_id|>system<|end_header_id|> {system_prompt}"
-
-    return _SYSTEM_TURN.sub(system_turn, formatted_text).replace("<|pad|>", "")
+def build_training_example(formatted_text: str, system_prompt: str) -> tuple[str, str]:
+    """(prompt, answer): the prompt exactly as at test time (evaluation.inference.build_prompt)
+    and the reference answer that follows it, ending with <|eot_id|>."""
+    prompt, reference = build_prompt(formatted_text, system_prompt)
+    return prompt, f"\n{reference}{END_TAG}"
 
 
-def make_dataset(texts: list[str], tokenizer: Any) -> Any:
-    """Tokenised datasets.Dataset (input_ids, attention_mask); padding is left to the collator."""
+def make_dataset(examples: list[tuple[str, str]], tokenizer: Any) -> Any:
+    """Tokenised datasets.Dataset of (prompt, answer) pairs: input_ids, attention_mask and
+    labels. Labels are -100 over the prompt, so the loss covers only the answer."""
     from datasets import Dataset
 
-    return Dataset.from_dict({"text": texts}).map(
-        lambda rows: tokenizer(
-            rows["text"], add_special_tokens=True, truncation=False, padding=False
-        ),
-        batched=True,
-        remove_columns=["text"],
+    def tokenise(rows: dict[str, list[str]]) -> dict[str, list[list[int]]]:
+        prompts = tokenizer(rows["prompt"], add_special_tokens=True)["input_ids"]
+        answers = tokenizer(rows["answer"], add_special_tokens=False)["input_ids"]
+        input_ids = [p + a for p, a in zip(prompts, answers)]
+        return {
+            "input_ids": input_ids,
+            "attention_mask": [[1] * len(ids) for ids in input_ids],
+            "labels": [[-100] * len(p) + a for p, a in zip(prompts, answers)],
+        }
+
+    prompts, answers = zip(*examples)
+    return Dataset.from_dict({"prompt": list(prompts), "answer": list(answers)}).map(
+        tokenise, batched=True, remove_columns=["prompt", "answer"]
     )
 
 
@@ -56,13 +52,10 @@ def build_trainer(
     config: TrainingConfig,
     output_dir: Path,
 ) -> Any:
-    """Trainer with the original arguments, causal-LM collator and early stopping.
-
-    The loss covers every token (system prompt, question and answer); only padding
-    is masked out. Logging goes to the trainer's log history, not Weights & Biases.
-    """
+    """Trainer with the original arguments and early stopping. The collator pads labels
+    with -100, so padding adds no loss. Logging goes to the trainer's log history."""
     from transformers import (
-        DataCollatorForLanguageModeling,
+        DataCollatorForSeq2Seq,
         EarlyStoppingCallback,
         Trainer,
         TrainingArguments,
@@ -107,7 +100,7 @@ def build_trainer(
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         processing_class=tokenizer,
-        data_collator=DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False),
+        data_collator=DataCollatorForSeq2Seq(tokenizer=tokenizer, label_pad_token_id=-100),
         callbacks=[EarlyStoppingCallback(early_stopping_patience=config.early_stopping_patience)],
     )
 
@@ -120,8 +113,8 @@ def train(trainer: Any, output_dir: Path, resume: bool = True) -> Any:
 
     Prefix tuning with projection cannot resume, and cannot reload its best checkpoint
     at the end (transformers 4.47 and 5): checkpoints hold only the projected prefix, not
-    the MLP that produces it. Train it with resume=False. When reloading the best
-    checkpoint fails this way, the final weights are kept, as in the original run.
+    the MLP that produces it. Train it with resume=False. When reloading fails this way,
+    training still succeeds; run_training saves the best checkpoint's adapter files.
     """
     checkpoints = sorted(output_dir.glob("checkpoint-*"), key=lambda p: int(p.name.split("-")[1]))
     if checkpoints and not resume:
@@ -140,8 +133,8 @@ def train(trainer: Any, output_dir: Path, resume: bool = True) -> Any:
             raise
         print(
             f"Could not reload the best checkpoint ({trainer.state.best_model_checkpoint}, "
-            f"eval_loss {trainer.state.best_metric}); keeping the final weights from step "
-            f"{trainer.state.global_step}, as the original run did."
+            f"eval_loss {trainer.state.best_metric}) into the training model; its saved "
+            f"adapter files are still usable."
         )
     finally:
         tokenizer.padding_side = padding_side
@@ -156,19 +149,18 @@ def run_training(
     system_prompt: str,
     config: TrainingConfig,
     resume: bool = True,
-    keep_bos: bool = True,
 ) -> dict[str, Any]:
     """Train on data_dir's train/validation splits and save everything under run_dir.
 
-    Saves checkpoints/, adapter/ (the best checkpoint's weights where they can be
-    reloaded, otherwise the final ones), the two loss-curve figures and training.json
-    (summary, config, environment and full log history). Returns the summary. After a
-    resume, training_minutes covers only the resumed part.
+    Saves checkpoints/, adapter/ (copied from the checkpoint with the lowest validation
+    loss), the two loss-curve figures and training.json (summary, config, environment
+    and full log history). Returns the summary. After a resume, training_minutes covers
+    only the resumed part.
     """
     datasets = {
         split: make_dataset(
             [
-                build_training_text(text, system_prompt, keep_bos)
+                build_training_example(text, system_prompt)
                 for text in pd.read_json(data_dir / f"{split}.jsonl", lines=True)["formatted_text"]
             ],
             tokenizer,
@@ -184,14 +176,16 @@ def run_training(
     start = time.time()
     state = train(trainer, checkpoint_dir, resume)
     minutes = (time.time() - start) / 60
-    trainer.save_model(str(run_dir / "adapter"))
+    best = state.best_model_checkpoint
+    (run_dir / "adapter").mkdir(parents=True, exist_ok=True)
+    for name in ADAPTER_FILES:
+        shutil.copy2(Path(best) / name, run_dir / "adapter" / name)
 
     for name, figure in zip(("training_loss.png", "eval_loss.png"), plot_training_curves(state.log_history)):
         figure.savefig(run_dir / name)
     eval_losses = [(log["step"], log["eval_loss"]) for log in state.log_history if "eval_loss" in log]
-    best = state.best_model_checkpoint
     summary = {
-        "best_step": int(best.rsplit("-", 1)[1]) if best else None,
+        "best_step": int(best.rsplit("-", 1)[1]),
         "best_eval_loss": state.best_metric,
         "final_step": state.global_step,
         "epoch": state.epoch,

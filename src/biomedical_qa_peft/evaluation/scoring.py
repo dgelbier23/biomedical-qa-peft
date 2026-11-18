@@ -16,6 +16,7 @@ from biomedical_qa_peft.evaluation.metrics import (
     NLI_LABELS,
     bertscore_scores,
     bootstrap_ci,
+    detailed_answer,
     format_stats,
     meteor_scores,
     nli_results,
@@ -47,6 +48,10 @@ def load_scorers(config: InferenceConfig) -> Scorers:
 def _long_answer(
     predictions: list[str], references: list[str], scorers: Scorers, config: InferenceConfig
 ) -> dict[str, Any]:
+    """NLI, METEOR and BERTScore on the explanations only: the yes/no is scored separately,
+    and left in, it dominates NLI (a wrong yes/no reads as a contradiction)."""
+    predictions = [detailed_answer(p) for p in predictions]
+    references = [detailed_answer(r) for r in references]
     return {
         "nli": nli_results(scorers.nli_pipeline, predictions, references, config.nli_batch_size),
         "meteor": meteor_scores(predictions, references),
@@ -71,7 +76,7 @@ def evaluate_responses(
         fmt = pool.apply_async(format_stats, (predictions,))
         return {
             "format": fmt.get(),
-            "short_answer": score_short_answers(yes_probabilities, references),
+            "short_answer": score_short_answers(yes_probabilities, predictions, references),
             "long_answer": long.get(),
         }
 
@@ -83,7 +88,8 @@ def summarise(results: dict[str, Any]) -> dict[str, float]:
     counts = long["nli"]["counts"]
     total = sum(counts.values())
     return {
-        **{k: 100 * short[k] for k in ("accuracy", "precision", "recall", "f1")},
+        **{k: 100 * short[k]
+           for k in ("accuracy", "precision", "recall", "f1", "written_accuracy")},
         **{label.lower(): 100 * counts[label] / total for label in NLI_LABELS},
         "meteor": float(np.mean(long["meteor"])),
         "bertscore": float(np.mean(long["bertscore"])),
@@ -95,12 +101,14 @@ def confidence_intervals(results: dict[str, Any], config: InferenceConfig) -> di
     """95% bootstrap intervals over test rows, in the same units as summarise."""
     predicted = np.array(results["short_answer"]["predictions"])
     expected = np.array(results["short_answer"]["references"])
+    written = np.array(results["short_answer"]["written_correct"])
     entailed = np.array(results["long_answer"]["nli"]["labels"]) == "ENTAILMENT"
     meteor = np.array(results["long_answer"]["meteor"])
     bertscore = np.array(results["long_answer"]["bertscore"])
     statistics = {
         "accuracy": lambda i: 100 * np.mean(predicted[i] == expected[i]),
         "f1": lambda i: 100 * f1_score(expected[i], predicted[i], average="weighted", zero_division=0),
+        "written_accuracy": lambda i: 100 * np.mean(written[i]),
         "entailment": lambda i: 100 * np.mean(entailed[i]),
         "meteor": lambda i: np.mean(meteor[i]),
         "bertscore": lambda i: np.mean(bertscore[i]),
@@ -141,7 +149,7 @@ def yes_no_accuracy(
     """Short-answer accuracy (0-100) of a system prompt, without generating long answers."""
     prompts, references = zip(*(build_prompt(t, system_prompt) for t in formatted_texts))
     probabilities = score_yes_no(model, tokenizer, list(prompts), config)
-    return 100 * score_short_answers(probabilities, list(references))["accuracy"]
+    return 100 * score_short_answers(probabilities, list(references), list(references))["accuracy"]
 
 
 def run_method(
@@ -157,12 +165,17 @@ def run_method(
     """Score yes/no answers, generate long answers, evaluate, and save under run_dir.
 
     If run_dir already holds predictions.jsonl (e.g. after a Colab disconnect during
-    scoring), those predictions are reused. Delete the folder to start over. Returns
-    the summary row; results.json also holds the 95% confidence intervals.
+    scoring), those predictions are reused, unless results.json shows they came from a
+    different InferenceConfig. Delete the folder to start over. Returns the summary row;
+    results.json also holds the 95% confidence intervals.
     """
     prompts, references = zip(*(build_prompt(t, system_prompt) for t in formatted_texts))
     seconds = None
     if (run_dir / "predictions.jsonl").exists():
+        results_file = run_dir / "results.json"
+        if (results_file.exists()
+                and json.loads(results_file.read_text())["inference_config"] != asdict(config)):
+            raise ValueError(f"{run_dir} holds predictions from another InferenceConfig; delete it")
         print(f"Reusing saved predictions in {run_dir}")
         saved = load_predictions(run_dir)
         if saved["reference"].tolist() != list(references):

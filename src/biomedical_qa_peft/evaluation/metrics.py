@@ -17,9 +17,10 @@ _FORMAT = re.compile(
     r"\s*\**Detailed Answer:?\**:?(.*\w.*)$",
     re.DOTALL | re.IGNORECASE,
 )
-_SHORT_ANSWER = re.compile(
-    r"(?:Simplified\s+)?Answer(?:\s*is|\s*:)?\s*(yes|no|unclear)\b", re.IGNORECASE
-)
+# Labels may carry markdown bold, brackets or braces, e.g. "**Simplified Answer:** Yes",
+# "[Simplified Answer]\nno" or "Simplified Answer: {yes}".
+_STATED_ANSWER = re.compile(r"Simplified Answer[\]:*\s{]*(yes|no)\b", re.IGNORECASE)
+_DETAILED_LABEL = re.compile(r"Detailed Answer[\]:*]*", re.IGNORECASE)
 
 
 def has_valid_format(output: str) -> bool:
@@ -38,26 +39,38 @@ def format_stats(outputs: list[str]) -> dict[str, float]:
     }
 
 
-def extract_short_answer(text: str) -> str:
-    """yes / no / unclear after "Answer", or "not_found"."""
-    match = _SHORT_ANSWER.search(text)
-    return match.group(1).lower() if match else "not_found"
+def stated_answer(text: str) -> str:
+    """The yes / no written after "Simplified Answer" (any style), or "none"."""
+    match = _STATED_ANSWER.search(text)
+    return match.group(1).lower() if match else "none"
 
 
-def score_short_answers(yes_probabilities: list[float], references: list[str]) -> dict[str, Any]:
-    """Accuracy and weighted precision/recall/F1 (0-1) of yes/no answers.
+def detailed_answer(text: str) -> str:
+    """The explanation after "Detailed Answer"; the whole text if there is no such label."""
+    return _DETAILED_LABEL.split(text, maxsplit=1)[-1].strip()
 
-    An answer is "yes" when P(yes) > 0.5. Returns the metrics and the integer labels.
+
+def score_short_answers(
+    yes_probabilities: list[float], predictions: list[str], references: list[str]
+) -> dict[str, Any]:
+    """Accuracy and weighted precision/recall/F1 (0-1) of yes/no answers, where an answer
+    is "yes" when P(yes) > 0.5. Written accuracy: how often the yes/no written in the
+    generated answer matches the reference (no written answer counts as wrong).
+
+    Also returns the integer labels and per-row written correctness.
     """
     predicted = [int(p > 0.5) for p in yes_probabilities]
-    expected = [LABELS[extract_short_answer(r)] for r in references]
+    expected = [LABELS[stated_answer(r)] for r in references]
+    written = [stated_answer(p) == stated_answer(r) for p, r in zip(predictions, references)]
     return {
         "accuracy": accuracy_score(expected, predicted),
         "precision": precision_score(expected, predicted, average="weighted", zero_division=0),
         "recall": recall_score(expected, predicted, average="weighted", zero_division=0),
         "f1": f1_score(expected, predicted, average="weighted", zero_division=0),
+        "written_accuracy": sum(written) / len(written),
         "predictions": predicted,
         "references": expected,
+        "written_correct": written,
     }
 
 
@@ -117,3 +130,12 @@ def bootstrap_ci(
     rng = np.random.default_rng(seed)
     values = [statistic(rng.integers(0, n_rows, n_rows)) for _ in range(samples)]
     return np.percentile(values, [2.5, 97.5]).tolist()
+
+
+def mcnemar_p(correct_a: list[bool], correct_b: list[bool]) -> float:
+    """Two-sided exact McNemar p-value: do two methods' error rates differ on the same rows?"""
+    from scipy.stats import binomtest
+
+    only_a = sum(a and not b for a, b in zip(correct_a, correct_b))
+    only_b = sum(b and not a for a, b in zip(correct_a, correct_b))
+    return binomtest(only_a, only_a + only_b).pvalue if only_a + only_b else 1.0

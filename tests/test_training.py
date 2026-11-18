@@ -11,33 +11,31 @@ from conftest import HEADS, HIDDEN, KV_HEADS, LAYERS
 
 from biomedical_qa_peft.data.config import SYSTEM_PROMPT
 from biomedical_qa_peft.evaluation.config import BASELINE_PROMPT
+from biomedical_qa_peft.evaluation.inference import build_prompt
 from biomedical_qa_peft.training.config import LoraSettings, PrefixConfig, TrainingConfig
 from biomedical_qa_peft.training.lora import add_lora
 from biomedical_qa_peft.training.prefix_tuning import add_prefix
 from biomedical_qa_peft.training.trainer import (
     build_trainer,
-    build_training_text,
+    build_training_example,
     make_dataset,
     plot_training_curves,
     run_training,
     train,
 )
 
-def test_build_training_text_swaps_system_prompt_and_keeps_answer() -> None:
-    formatted = (
-        "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n"
-        f"{SYSTEM_PROMPT}<|eot_id|><|start_header_id|>user<|end_header_id|>\nQuestion: q?<|eot_id|>"
-        "<|start_header_id|>assistant<|end_header_id|>\nSimplified Answer: no<|eot_id|><|pad|>"
-    )
+FORMATTED = (
+    "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n"
+    f"{SYSTEM_PROMPT}<|eot_id|><|start_header_id|>user<|end_header_id|>\nQuestion: q?<|eot_id|>"
+    "<|start_header_id|>assistant<|end_header_id|>\nSimplified Answer: no<|eot_id|><|pad|>"
+)
 
-    rest = (
-        f"<|start_header_id|>system<|end_header_id|> {BASELINE_PROMPT}<|eot_id|>"
-        "<|start_header_id|>user<|end_header_id|>\nQuestion: q?<|eot_id|>"
-        "<|start_header_id|>assistant<|end_header_id|>\nSimplified Answer: no<|eot_id|>"
-    )
-    # Prefix tuning keeps <|begin_of_text|> (the tokenizer adds a second); LoRA drops it.
-    assert build_training_text(formatted, BASELINE_PROMPT) == "<|begin_of_text|>" + rest
-    assert build_training_text(formatted, BASELINE_PROMPT, keep_bos=False) == rest
+
+def test_training_prompt_is_the_test_prompt_followed_by_the_answer() -> None:
+    prompt, answer = build_training_example(FORMATTED, BASELINE_PROMPT)
+
+    assert prompt == build_prompt(FORMATTED, BASELINE_PROMPT)[0]
+    assert answer == "\nSimplified Answer: no<|eot_id|>"
 
 
 def test_prefix_trains_the_projection_mlp_but_saves_only_its_output(tiny_llama) -> None:
@@ -69,29 +67,31 @@ def test_lora_trains_query_and_value_adapters(tiny_llama) -> None:
     assert model.config.use_cache is False
 
 
-def test_collator_masks_only_padding_in_labels(tiny_llama, tokenizer, tmp_path: Path) -> None:
+def test_loss_covers_only_the_answer(tiny_llama, tokenizer, tmp_path: Path) -> None:
     tokenizer.padding_side = "right"
-    dataset = make_dataset(["is the drug safe", "yes"], tokenizer)
+    dataset = make_dataset([("is the drug", "safe yes"), ("yes", "no")], tokenizer)
     trainer = build_trainer(tiny_llama(), tokenizer, dataset, dataset,
                             replace(TrainingConfig(), fp16=False), tmp_path)
 
     batch = trainer.data_collator([dataset[0], dataset[1]])
 
-    assert batch["input_ids"].tolist() == [[3, 4, 5, 6], [7, 0, 0, 0]]
-    assert batch["labels"].tolist() == [[3, 4, 5, 6], [7, -100, -100, -100]]
+    assert batch["input_ids"].tolist() == [[3, 4, 5, 6, 7], [7, 8, 0, 0, 0]]
+    # Prompt tokens and padding are -100; only answer tokens count towards the loss.
+    assert batch["labels"].tolist() == [[-100, -100, -100, 6, 7], [-100, 8, -100, -100, -100]]
 
 
 CONFIG = replace(
     TrainingConfig(), fp16=False, num_train_epochs=1, dataloader_num_workers=0,
     eval_steps=1, save_steps=1, logging_steps=1, warmup_steps=0,
 )
-TEXTS = ["is the drug safe yes", "it was tested in mice no", "is it safe yes", "the answer no"] * 2
+EXAMPLES = [("is the drug safe", "yes"), ("it was tested in mice", "no"),
+            ("is it safe", "yes"), ("the answer", "no")] * 2
 
 
-def test_projected_prefix_trains_keeps_final_weights_and_refuses_to_resume(
+def test_projected_prefix_cannot_reload_its_best_checkpoint_or_resume(
     tiny_llama, tokenizer, tmp_path: Path, capsys: pytest.CaptureFixture
 ) -> None:
-    dataset = make_dataset(TEXTS, tokenizer)
+    dataset = make_dataset(EXAMPLES, tokenizer)
     tokenizer.padding_side = "left"
     trainer = build_trainer(add_prefix(tiny_llama(), PrefixConfig()), tokenizer,
                             dataset, dataset, CONFIG, tmp_path)
@@ -110,7 +110,7 @@ def test_projected_prefix_trains_keeps_final_weights_and_refuses_to_resume(
     assert eval_fig.axes[0].get_title() == "Evaluation Loss by Steps"
 
 
-def test_run_training_saves_adapter_curves_and_summary(
+def test_run_training_saves_the_best_checkpoint_curves_and_summary(
     tiny_llama, tokenizer, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import matplotlib.pyplot as plt
@@ -121,15 +121,21 @@ def test_run_training_saves_adapter_curves_and_summary(
 
     data_dir = tmp_path / "data"
     data_dir.mkdir()
+    row = FORMATTED.replace("q?", "is the drug safe")
     for split in ("train", "validation"):
-        pd.DataFrame({"formatted_text": TEXTS}).to_json(data_dir / f"{split}.jsonl", orient="records", lines=True)
+        pd.DataFrame({"formatted_text": [row] * 8}).to_json(
+            data_dir / f"{split}.jsonl", orient="records", lines=True)
     run_dir = tmp_path / "run"
 
+    # 4 steps keeping 2 checkpoints, so older ones are deleted along the way.
     summary = run_training(run_dir, add_prefix(tiny_llama(), PrefixConfig()), tokenizer,
-                           data_dir, BASELINE_PROMPT, CONFIG, resume=False)
+                           data_dir, BASELINE_PROMPT, replace(CONFIG, num_train_epochs=2),
+                           resume=False)
 
-    assert summary["final_step"] == 2 and summary["trainable_parameters"] > 0
-    assert (run_dir / "adapter" / "adapter_model.safetensors").exists()
+    best = run_dir / "checkpoints" / f"checkpoint-{summary['best_step']}"
+    for name in ("adapter_config.json", "adapter_model.safetensors"):
+        assert (run_dir / "adapter" / name).read_bytes() == (best / name).read_bytes()
+    assert summary["final_step"] == 4 and summary["trainable_parameters"] > 0
     assert (run_dir / "training_loss.png").exists() and (run_dir / "eval_loss.png").exists()
     record = json.loads((run_dir / "training.json").read_text())
     assert record["training_config"]["learning_rate"] == 2e-5 and record["log_history"]
@@ -138,7 +144,7 @@ def test_run_training_saves_adapter_curves_and_summary(
 def test_lora_reloads_best_checkpoint_and_resumes(
     tiny_llama, tokenizer, tmp_path: Path, capsys: pytest.CaptureFixture
 ) -> None:
-    dataset = make_dataset(TEXTS, tokenizer)
+    dataset = make_dataset(EXAMPLES, tokenizer)
     states = []
     for _ in range(2):
         model = add_lora(tiny_llama(), LoraSettings())

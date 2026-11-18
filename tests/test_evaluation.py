@@ -15,11 +15,13 @@ from biomedical_qa_peft.evaluation.inference import (
 )
 from biomedical_qa_peft.evaluation.metrics import (
     bootstrap_ci,
-    extract_short_answer,
+    detailed_answer,
     format_stats,
     has_valid_format,
+    mcnemar_p,
     nli_results,
     score_short_answers,
+    stated_answer,
 )
 
 REFERENCE = "Simplified Answer: no\nDetailed Answer: Copeptin did not differ between groups."
@@ -136,14 +138,16 @@ def test_format_stats_counts_valid_answers() -> None:
     }
 
 
-@pytest.mark.parametrize(("text", "expected"), [
-    ("Simplified Answer: Yes\nDetailed Answer: ...", "yes"),
-    ("**Simplified Answer:** No", "not_found"),  # markdown bold breaks the regex
-    ("The answer is unclear.", "unclear"),
-    ("Probably yes.", "not_found"),
+@pytest.mark.parametrize(("text", "stated", "detailed"), [
+    (REFERENCE, "no", "Copeptin did not differ between groups."),
+    ("**Simplified Answer:** Yes\n\n**Detailed Answer:** It helped.", "yes", "It helped."),
+    ("Simplified Answer: {no}\nDetailed Answer: It did not.", "no", "It did not."),
+    ("[Simplified Answer]\nno\n\n[Detailed Answer] Unclear.", "no", "Unclear."),
+    ("Probably yes, it helped.", "none", "Probably yes, it helped."),
 ])
-def test_extract_short_answer(text: str, expected: str) -> None:
-    assert extract_short_answer(text) == expected
+def test_stated_and_detailed_answer(text: str, stated: str, detailed: str) -> None:
+    assert stated_answer(text) == stated
+    assert detailed_answer(text) == detailed
 
 
 def test_score_yes_no_reads_next_token_probabilities_independent_of_batching(
@@ -167,14 +171,25 @@ def test_score_yes_no_reads_next_token_probabilities_independent_of_batching(
     assert one == pytest.approx(padded, abs=1e-5)  # left padding does not change answers
 
 
-def test_score_short_answers_thresholds_yes_probability() -> None:
+def test_score_short_answers_from_probabilities_and_from_written_answers() -> None:
     references = ["Simplified Answer: no", "Simplified Answer: yes", "Simplified Answer: yes"]
+    written = ["Simplified Answer: no", "Simplified Answer: no", "No answer given"]
 
-    result = score_short_answers([0.2, 0.9, 0.4], references)
+    result = score_short_answers([0.2, 0.9, 0.4], written, references)
 
     assert result["predictions"] == [0, 1, 0]
     assert result["references"] == [0, 1, 1]
     assert result["accuracy"] == pytest.approx(2 / 3)
+    assert result["written_correct"] == [True, False, False]
+    assert result["written_accuracy"] == pytest.approx(1 / 3)
+
+
+def test_mcnemar_p_compares_only_rows_where_methods_disagree() -> None:
+    same = [True, False] * 50
+    assert mcnemar_p(same, same) == 1.0
+    a_better = [True] * 20 + [False] * 80
+    b_worse = [False] * 20 + [False] * 80
+    assert mcnemar_p(a_better, b_worse) < 1e-5  # 20 vs 0 discordant rows
 
 
 def test_nli_results_pairs_reference_premise_with_prediction_in_batches() -> None:
@@ -215,8 +230,10 @@ def test_evaluate_references_against_themselves_scores_perfectly(
 ) -> None:
     # METEOR needs NLTK data and BERTScore a download; both are stubbed here.
     monkeypatch.setattr(scoring, "meteor_scores", lambda p, r: [1.0] * len(p))
+    seen: list[dict] = []
     scorers = scoring.Scorers(
-        nli_pipeline=lambda inputs: [{"label": "ENTAILMENT", "score": 0.9} for _ in inputs],
+        nli_pipeline=lambda inputs: seen.extend(inputs) or [
+            {"label": "ENTAILMENT", "score": 0.9} for _ in inputs],
         bertscore=BertScore(1.0),
     )
     references = [REFERENCE, REFERENCE.replace("no", "yes", 1)]
@@ -224,8 +241,12 @@ def test_evaluate_references_against_themselves_scores_perfectly(
 
     results = scoring.evaluate_responses([0.1, 0.9], references, references, scorers, config)
 
+    # Long-answer metrics see only the explanation, not the yes/no line.
+    assert seen[0] == {"text": "Copeptin did not differ between groups.",
+                       "text_pair": "Copeptin did not differ between groups."}
     assert scoring.summarise(results) == {
         "accuracy": 100.0, "precision": 100.0, "recall": 100.0, "f1": 100.0,
+        "written_accuracy": 100.0,
         "entailment": 100.0, "contradiction": 0.0, "neutral": 0.0,
         "meteor": 1.0, "bertscore": 1.0, "format_adherence": 100.0,
     }
@@ -261,3 +282,5 @@ def test_run_method_saves_then_reuses_predictions(
     record = (tmp_path / "results.json").read_text()
     assert '"method": "baseline"' in record and '"confidence_intervals"' in record
     assert '"gpu":' in record  # environment is recorded
+    with pytest.raises(ValueError):  # predictions made with other settings are not reused
+        scoring.run_method(*args[:-1], InferenceConfig(bootstrap_samples=50, max_new_tokens=9))

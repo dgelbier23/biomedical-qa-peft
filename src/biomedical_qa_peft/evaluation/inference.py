@@ -21,10 +21,11 @@ _DATA_SYSTEM_HEADER = re.compile(
 
 
 def load_base_model(config: InferenceConfig) -> tuple[Any, Any]:
-    """Llama in 4-bit NF4 with an added <|pad|> token and left padding, as in the original.
+    """Llama in 4-bit NF4, padding on the left with Llama's reserved pad token.
 
-    Needs a CUDA GPU (bitsandbytes). Adding the pad token resizes the embeddings;
-    the new row is initialised randomly, so seed before calling this.
+    Needs a CUDA GPU (bitsandbytes). The dissertation added a new <|pad|> token instead,
+    which resized the embeddings: a randomly initialised row, and PEFT then saved the
+    whole embedding matrix with every adapter.
     """
     from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
@@ -44,9 +45,9 @@ def load_base_model(config: InferenceConfig) -> tuple[Any, Any]:
         device_map="auto",
         attn_implementation="sdpa",
     )
-    if tokenizer.pad_token is None:
-        tokenizer.add_special_tokens({"pad_token": config.pad_token})
-        model.resize_token_embeddings(len(tokenizer))
+    if config.pad_token not in tokenizer.get_vocab():
+        raise ValueError(f"{config.pad_token} is not in the {config.model_name} vocabulary")
+    tokenizer.pad_token = config.pad_token
     tokenizer.padding_side = "left"  # Required for batched generation.
     return model, tokenizer
 

@@ -118,7 +118,8 @@ responses.""",
 class InferenceConfig:
     model_name: str = DataConfig.tokenizer_name
     model_revision: str = DataConfig.tokenizer_revision
-    pad_token: str = "<|pad|>"
+    # Reserved in the Llama 3.2 vocabulary, so no new token (and no resized embeddings).
+    pad_token: str = "<|finetune_right_pad_id|>"
     # Long answers: greedy decoding, so a run is repeatable. The dissertation sampled
     # (temperature 0.7) with no_repeat_ngram_size=2, which banned the second "Answer:"
     # and made the required format impossible. Its repetition_penalty=1.2 is also off:
@@ -126,7 +127,7 @@ class InferenceConfig:
     # models that write lowercase answers wrote "yes" far too often.
     max_new_tokens: int = 150
     repetition_penalty: float = 1.0
-    # Seeds the added pad token's embedding (see inference.load_base_model).
+    # Seeds the bootstrap resampling.
     seed: int = 42
     batch_size: int = 64
     num_workers: int = 4

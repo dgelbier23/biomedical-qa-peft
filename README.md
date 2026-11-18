@@ -149,6 +149,10 @@ The v1 reproduction keeps these on purpose. All are fixed in v2.
     "Simplified Answer: yes/no", and a wrong yes/no reads as a contradiction (60-100% of
     such answers) whatever the explanation says. v2 runs NLI, METEOR and BERTScore on the
     explanation only; the yes/no is scored by accuracy.
+12. *(Fixed in v2.)* **A new pad token resizes the embeddings.** Adding `<|pad|>` gives the
+    embedding matrix a randomly initialised row, and PEFT then saves the whole matrix
+    (0.8-3 GB) with every checkpoint and adapter. v2 pads with Llama 3.2's reserved
+    `<|finetune_right_pad_id|>` token; padding is masked, so results are unaffected.
 
 ## Repository layout
 

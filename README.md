@@ -7,10 +7,9 @@ prefix tuning and LoRA, and scored with a custom evaluation framework.
 A clean, reproducible rebuild of my BSc dissertation, *Comparing Parameter-Efficient
 Fine-Tuning for Biomedical Research QA*.
 
-> **Status: migration in progress.** The original dissertation code is being ported
-> stage by stage. Behaviour is reproduced faithfully first, then improved.
-> So far, the data splits and the baseline, prompt-engineering and prefix-tuning
-> results are reproduced; LoRA is next.
+> **Status: faithful port complete.** The original dissertation code was ported stage by
+> stage, and the data splits and all four methods' results are reproduced (tag
+> `v1-reproduction`). Next: fixing the known issues below.
 
 ## Pipeline
 
@@ -52,14 +51,14 @@ Fine-Tuning for Biomedical Research QA*.
 ### Results (1,000 test rows)
 
 Each cell shows **dissertation → reproduced**. Reproduced runs use this code with
-seed 42: baseline and prompt engineering on an A100 GPU, prefix tuning on an L4.
+seed 42: baseline and prompt engineering on an A100 GPU, prefix tuning and LoRA on an L4.
 
 | Method | Accuracy | F1 | NLI entailment | METEOR | BERTScore |
 |---|---|---|---|---|---|
 | Baseline | 82.6% → 81.7% | 82.5% → 81.5% | 16.6% → 19.3% | 0.232 → 0.234 | 0.783 → 0.783 |
 | Prompt engineering | 76.5% → 74.9% | 76.7% → 74.8% | 19.6% → 16.2% | 0.244 → 0.244 | 0.777 → 0.779 |
 | Prefix tuning (retrained) | 69.9% → 71.3% | 70.3% → 70.9% | 6.6% → 6.6% | 0.236 → 0.249 | 0.786 → 0.789 |
-| LoRA | 65.5% → *pending* | 65.6% → *pending* | 5.3% → *pending* | 0.231 → *pending* | 0.788 → *pending* |
+| LoRA (retrained) | 65.5% → 63.7% | 65.6% → 62.7% | 5.3% → 7.8% | 0.231 → 0.235 | 0.788 → 0.793 |
 
 The dissertation numbers come from single, unseeded sampling runs, so a re-run can only
 match them within sampling noise. Before running anything, we agreed tolerances of
@@ -84,7 +83,19 @@ match them within sampling noise. Before running anything, we agreed tolerances 
 - The original dissertation adapter, scored with this code, has all 10 values within
   tolerance (accuracy 70.8%, F1 71.3%, entailment 6.5%, METEOR 0.232, BERTScore 0.786).
 - The main finding holds: prefix tuning scores about 10 points below the baseline on
-  accuracy, with the lowest entailment of the methods so far.
+  accuracy, with lower entailment than the baseline and prompt engineering.
+
+**LoRA is reproduced (2026-11-18).**
+- Retraining follows the original run: validation loss within 0.0005 of the original at
+  all 12 evaluations, ending at 1.576 at step 3,000 (all 3 epochs, best = final), with
+  the same 2,293,760 trainable parameters.
+- The retrained adapter has 9 of 10 values within tolerance. NLI "neutral" is 4.0 points
+  off (70.5% → 66.5%), at the edge of the sampling noise between two runs.
+- The original dissertation adapter, scored with this code, has all 10 values within
+  tolerance (accuracy 67.2%, F1 67.4%, entailment 7.2%, METEOR 0.234, BERTScore 0.790).
+- The two adapters train equally well yet score 67.2% and 63.7% accuracy: one sampling
+  run cannot separate methods a few points apart (known issue 5).
+- The dissertation's ranking holds: baseline > prompt engineering > prefix tuning > LoRA.
 
 ### Known issues (ported as-is, to be fixed after the faithful port)
 
@@ -111,6 +122,10 @@ match them within sampling noise. Before running anything, we agreed tolerances 
    cannot resume after a disconnect.
 8. **The loss covers the whole conversation.** It includes the system prompt and the
    question, not just the answer.
+9. **Logged training loss is twice the true value.** In transformers 4.47, with gradient
+   accumulation, the logged loss sums the 2 micro-batches instead of averaging them. The
+   gradients are correct, and validation loss is unaffected; only the training-loss
+   logs and figures are doubled.
 
 ## Repository layout
 

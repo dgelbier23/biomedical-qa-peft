@@ -10,16 +10,20 @@ from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_sc
 LABELS = {"no": 0, "yes": 1}
 NLI_LABELS = ("ENTAILMENT", "CONTRADICTION", "NEUTRAL")
 
-# Both labelled fields, in order, from the start; tolerates markdown bold, any case, and
-# braces copied from the prompt's "{yes or no}".
+# Both labelled fields, in order, from the start; tolerates markdown bold, any case,
+# braces copied from the prompt's "{yes or no}", and the [ANSWER BEGIN] / [ANSWER END]
+# wrapper that prompt-engineering candidates 4 and 5 ask for.
 _FORMAT = re.compile(
-    r"^\s*\**Simplified Answer:?\**:?[ \t]*\{?(yes|no)\}?\.?[ \t]*\n+"
+    r"^\s*(?:\[ANSWER BEGIN\]\s*)?\**Simplified Answer:?\**:?[ \t]*\{?(yes|no)\}?\.?[ \t]*\n+"
     r"\s*\**Detailed Answer:?\**:?(.*\w.*)$",
     re.DOTALL | re.IGNORECASE,
 )
 # Labels may carry markdown bold, brackets or braces, e.g. "**Simplified Answer:** Yes",
-# "[Simplified Answer]\nno" or "Simplified Answer: {yes}".
-_STATED_ANSWER = re.compile(r"Simplified Answer[\]:*\s{]*(yes|no)\b", re.IGNORECASE)
+# "[Simplified Answer]\nno" or "Simplified Answer: {yes}". A copied "{yes or no}"
+# placeholder is not an answer.
+_STATED_ANSWER = re.compile(
+    r"Simplified Answer[\]:*\s{]*(yes|no)\b(?!\s+or\b)", re.IGNORECASE
+)
 _DETAILED_LABEL = re.compile(r"Detailed Answer[\]:*]*", re.IGNORECASE)
 
 
@@ -46,8 +50,9 @@ def stated_answer(text: str) -> str:
 
 
 def detailed_answer(text: str) -> str:
-    """The explanation after "Detailed Answer"; the whole text if there is no such label."""
-    return _DETAILED_LABEL.split(text, maxsplit=1)[-1].strip()
+    """The explanation after "Detailed Answer" (up to any [ANSWER END]); the whole text if
+    there is no such label."""
+    return _DETAILED_LABEL.split(text, maxsplit=1)[-1].split("[ANSWER END]")[0].strip()
 
 
 def score_short_answers(

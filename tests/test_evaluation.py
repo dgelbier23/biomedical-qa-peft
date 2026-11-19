@@ -113,6 +113,9 @@ def test_generate_responses_keeps_prompt_order_across_batches() -> None:
     "**Simplified Answer:** Yes\n\n**Detailed Answer:** This study found an association.",
     "Simplified Answer: {yes}\nDetailed Answer: The study found associations.",
     "Simplified Answer: No.\nDetailed Answer: It did not.",
+    # Prompt-engineering wrapper, complete and cut off at max_new_tokens:
+    "[ANSWER BEGIN]\nSimplified Answer: yes\nDetailed Answer: It helped.\n[ANSWER END]",
+    "[ANSWER BEGIN]\nSimplified Answer: no\nDetailed Answer: It did not",
 ])
 def test_format_check_accepts_both_fields_in_any_style(answer: str) -> None:
     assert has_valid_format(answer)
@@ -143,7 +146,10 @@ def test_format_stats_counts_valid_answers() -> None:
     ("**Simplified Answer:** Yes\n\n**Detailed Answer:** It helped.", "yes", "It helped."),
     ("Simplified Answer: {no}\nDetailed Answer: It did not.", "no", "It did not."),
     ("[Simplified Answer]\nno\n\n[Detailed Answer] Unclear.", "no", "Unclear."),
+    ("[ANSWER BEGIN]\nSimplified Answer: yes\nDetailed Answer: It helped.\n[ANSWER END]",
+     "yes", "It helped."),
     ("Probably yes, it helped.", "none", "Probably yes, it helped."),
+    ("Simplified Answer: {yes or no}\nDetailed Answer: It helped.", "none", "It helped."),
 ])
 def test_stated_and_detailed_answer(text: str, stated: str, detailed: str) -> None:
     assert stated_answer(text) == stated

@@ -90,7 +90,7 @@ def build_trainer(
         report_to="none",
         torch_empty_cache_steps=config.torch_empty_cache_steps,
         torch_compile=False,
-        gradient_checkpointing=config.gradient_checkpointing,
+        activation_checkpointing=config.activation_checkpointing,
         train_sampling_strategy="group_by_length" if config.group_by_length else "random",
         seed=config.seed,
     )

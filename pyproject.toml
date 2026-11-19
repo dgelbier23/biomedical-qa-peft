@@ -20,9 +20,7 @@ dependencies = [
     "numpy",
     "pandas",
     "matplotlib",
-    "seaborn",
     "plotly",
-    "tabulate",
     "tqdm",
 ]
 

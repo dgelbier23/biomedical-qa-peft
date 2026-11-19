@@ -16,10 +16,8 @@ scikit-learn==1.6.1
 numpy
 pandas
 matplotlib
-seaborn
 plotly  # biomedical_qa_peft.viz and notebooks/07_figures.ipynb.
 kaleido  # Saving Plotly figures as images (local only; uses the installed Chrome).
-tabulate
 tqdm
 pytest
 jupyter

@@ -19,3 +19,10 @@ def test_every_notebook_bootstraps_this_repo() -> None:
     assert len(bootstraps) == 1
     repo = re.search(r'REPO = "(.+?)"', bootstraps.pop()).group(1)
     assert origin.removesuffix(".git").endswith(repo)
+
+
+def test_notebooks_are_committed_without_outputs() -> None:
+    # Outputs can hold machine paths, logs and tokens; clear them before committing.
+    for path in (ROOT / "notebooks").glob("*.ipynb"):
+        cells = json.loads(path.read_text(encoding="utf-8"))["cells"]
+        assert not any(c.get("outputs") for c in cells), f"{path.name} has saved outputs"

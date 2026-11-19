@@ -129,10 +129,6 @@ def load_predictions(run_dir: Path) -> pd.DataFrame:
     return pd.read_json(run_dir / "predictions.jsonl", lines=True)
 
 
-def load_summary(run_dir: Path) -> dict[str, float]:
-    return json.loads((run_dir / "results.json").read_text())["summary"]
-
-
 def save_results(run_dir: Path, **record: Any) -> None:
     """Write results.json: everything needed to interpret and repeat the run."""
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -166,16 +162,20 @@ def run_method(
 
     If run_dir already holds predictions.jsonl (e.g. after a Colab disconnect during
     scoring), those predictions are reused, unless results.json shows they came from a
-    different InferenceConfig. Delete the folder to start over. Returns the summary row;
-    results.json also holds the 95% confidence intervals.
+    different InferenceConfig. Delete the folder to start over. Rescoring keeps the
+    generation time and environment of the run that made the predictions, and records its
+    own as scoring_environment. Returns the summary row; results.json also holds the 95%
+    confidence intervals.
     """
     prompts, references = zip(*(build_prompt(t, system_prompt) for t in formatted_texts))
-    seconds = None
+    seconds, environment = None, describe_environment()
     if (run_dir / "predictions.jsonl").exists():
         results_file = run_dir / "results.json"
-        if (results_file.exists()
-                and json.loads(results_file.read_text())["inference_config"] != asdict(config)):
-            raise ValueError(f"{run_dir} holds predictions from another InferenceConfig; delete it")
+        if results_file.exists():
+            previous = json.loads(results_file.read_text())
+            if previous["inference_config"] != asdict(config):
+                raise ValueError(f"{run_dir} holds predictions from another InferenceConfig; delete it")
+            seconds, environment = previous["generation_seconds"], previous["environment"]
         print(f"Reusing saved predictions in {run_dir}")
         saved = load_predictions(run_dir)
         if saved["reference"].tolist() != list(references):
@@ -200,7 +200,8 @@ def run_method(
         system_prompt=system_prompt,
         inference_config=asdict(config),
         generation_seconds=seconds,
-        environment=describe_environment(),
+        environment=environment,
+        scoring_environment=describe_environment(),
         rows=len(references),
         results=results,
         **metadata,

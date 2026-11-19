@@ -32,13 +32,13 @@ class TrainingConfig:
     dataloader_num_workers: int = 2
     group_by_length: bool = True
     torch_empty_cache_steps: int = 4
-    gradient_checkpointing: bool = False
+    activation_checkpointing: bool = False  # Called gradient checkpointing before transformers 5.
     seed: int = 42
 
 
 # LoRA's saved training_args.bin: 4 x 2 = effective batch 8 (1,000 steps per epoch),
 # with gradient checkpointing; everything else as for prefix tuning.
-LORA_TRAINING = replace(TrainingConfig(), per_device_train_batch_size=4, gradient_checkpointing=True)
+LORA_TRAINING = replace(TrainingConfig(), per_device_train_batch_size=4, activation_checkpointing=True)
 
 
 @dataclass(frozen=True)

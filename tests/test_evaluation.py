@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -282,11 +283,13 @@ def test_run_method_saves_then_reuses_predictions(
     second = scoring.run_method(*args, method="baseline")
 
     assert len(calls) == 1  # second run reused predictions.jsonl
-    assert first == second == scoring.load_summary(tmp_path)
+    record = json.loads((tmp_path / "results.json").read_text())
+    assert first == second == record["summary"]
     assert first["accuracy"] == 100.0  # P(yes) 0.3 -> "no", the reference answer
     assert scoring.load_predictions(tmp_path)["yes_probability"].tolist() == pytest.approx([0.3, 0.3])
-    record = (tmp_path / "results.json").read_text()
-    assert '"method": "baseline"' in record and '"confidence_intervals"' in record
-    assert '"gpu":' in record  # environment is recorded
+    assert record["method"] == "baseline" and "accuracy" in record["confidence_intervals"]
+    # Rescoring keeps the generating run's time and environment.
+    assert record["generation_seconds"] == 1.0
+    assert "gpu" in record["environment"] and "gpu" in record["scoring_environment"]
     with pytest.raises(ValueError):  # predictions made with other settings are not reused
         scoring.run_method(*args[:-1], InferenceConfig(bootstrap_samples=50, max_new_tokens=9))

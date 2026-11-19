@@ -141,6 +141,9 @@ pre.raw { margin: 0; white-space: pre-wrap; word-break: break-word; font: 12.5px
 .hint { font-size: 12.5px; color: var(--muted); }
 footer { margin-top: 36px; padding-top: 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; display: grid; gap: 6px; max-width: 100ch; }
 footer p { margin: 0; }
+/* #card-q<N>: just that question and its four answers, for a static README image. */
+.card-only header, .card-only aside, .card-only footer, .card-only .nav, .card-only .link { display: none; }
+.card-only .layout { grid-template-columns: minmax(0, 1fr); margin-top: 0; }
 </style>
 </head>
 <body>
@@ -328,7 +331,9 @@ document.getElementById("population").textContent =
 
 renderLegend();
 renderFilters();
-const fromHash = Number((location.hash.match(/^#q(\d+)$/) || [])[1]);
+const [, cardOnly, hashQuestion] = location.hash.match(/^#(card-)?q(\d+)$/) || [];
+document.body.classList.toggle("card-only", Boolean(cardOnly));
+const fromHash = Number(hashQuestion);
 const start = DATA.rows.find((r) => r.i === fromHash) || DATA.rows[0];
 renderList();
 select(start.i);

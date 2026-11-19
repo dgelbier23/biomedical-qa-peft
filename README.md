@@ -11,6 +11,15 @@ Fine-Tuning for Biomedical Research QA*.
 > results reproduced (git tag `v1-reproduction`). v2 fixes the evaluation and training
 > method; the release clean-up is next.
 
+<p align="center">
+  <img src="docs/figures/answer_card.png" width="100%" alt="One PubMedQA test question, 'Does psychological distress compromise outcome in spinal surgery?' (reference: no), with the four methods' answers side by side: the baseline and prompt engineering answer yes, prefix tuning and LoRA answer no">
+</p>
+
+**[Browse the answers in the explorer →](https://dgelbier23.github.io/biomedical-qa-peft/explorer/)**
+Four methods' answers on 100 test questions, including the ones every method gets wrong.
+The question above was chosen by a fixed rule: the first sampled question where the
+baseline is wrong and both adapters are right.
+
 ## Pipeline
 
 1. **Data** (`biomedical_qa_peft.data`, defaults in `DataConfig`):
@@ -121,10 +130,18 @@ evaluation ran on an A100 GPU (metrics rescored on an L4).
 | Prefix tuning | 91.7% [89.9, 93.5] | 0.044 | 93.5% | 42.5% | 0.274 | 0.853 | 100% |
 | LoRA | **93.3%** [91.8, 94.9] | **0.0001** | 93.4% | 40.8% | 0.279 | 0.853 | 100% |
 
+<p align="center">
+  <img src="docs/figures/accuracy.png" width="85%" alt="Yes/no accuracy with 95% bootstrap intervals: baseline 89.6%, prompt engineering 87.4% (p = 0.023), prefix tuning 91.7% (p = 0.044), LoRA 93.3% (p = 0.00013)">
+</p>
+
 | Training | Trainable parameters | Best validation loss | Best step (of 6,000 / 3,000) | Time (A100) |
 |---|---|---|---|---|
 | Prefix tuning | 179,387,392 | 1.3716 | 4,000 (early-stopped at 4,500) | 40.8 min |
 | LoRA | 2,293,760 | 1.3709 | 3,000 (still improving slowly) | 49.7 min |
+
+<p align="center">
+  <img src="docs/figures/training_history.png" width="100%" alt="Training and validation loss for prefix tuning, whose validation loss rises after step 4,000, and LoRA, whose validation loss keeps falling to step 3,000">
+</p>
 
 **Findings**
 - **LoRA is the most accurate method,** and the only one clearly better than the baseline
@@ -139,9 +156,25 @@ evaluation ran on an A100 GPU (metrics rescored on an L4).
   the reference roughly triples (13.7% → 41–43%) and BERTScore rises. The adapters write
   explanations about half as long as the references (about 20 vs 37 words), so
   recall-weighted METEOR is lower; length explains part of that gap.
+- **Fine-tuning also makes P(yes) more trustworthy.** LoRA has the best ranking (ROC AUC
+  0.982 vs the baseline's 0.967) and calibration (Brier score 0.051 vs 0.071).
 - **Prompt engineering writes the format but not better answers.** The validation-chosen
   prompt raises format adherence to 99.9% and written accuracy to 89.3%, but its yes/no
   accuracy and entailment are below the baseline's.
+
+<p align="center">
+  <img src="docs/figures/nli.png" width="85%" alt="Share of explanations that entail, are neutral to, or contradict the reference: entailment 14% baseline, 10% prompt engineering, 42% prefix tuning, 41% LoRA">
+</p>
+
+<details>
+<summary><b>More figures:</b> calibration and ROC, confusion matrices, accuracy against trainable parameters</summary>
+
+<p align="center">
+  <img src="docs/figures/calibration.png" width="100%" alt="Reliability diagram and ROC curves of P(yes) for the four methods; AUC 0.967 baseline, 0.960 prompt engineering, 0.979 prefix tuning, 0.982 LoRA">
+  <img src="docs/figures/confusion.png" width="100%" alt="Confusion matrices of the yes/no answers for the four methods">
+  <img src="docs/figures/efficiency.png" width="85%" alt="Accuracy against trainable parameters on a log scale: LoRA 93.3% with 2.3 million, prefix tuning 91.7% with 179 million, above the baseline and prompt engineering, which train none">
+</p>
+</details>
 
 **Limitations**
 - **Single seed.** Each adapter was trained once. Prefix tuning's early-stopping point is
@@ -209,8 +242,10 @@ src/biomedical_qa_peft/
   training/      prefix tuning and LoRA
   evaluation/    inference and the evaluation metrics/manager
   runtime/       environment detection, devices, seeding
+  viz/           colours, Plotly theme, result figures, answer explorer
 notebooks/       thin notebooks that call the package (run locally or in Colab)
 tests/           CPU-only tests; never download the gated model
+docs/            README figures and the answer explorer (GitHub Pages)
 artifacts/       local run outputs (ignored by Git)
 ```
 
@@ -261,9 +296,10 @@ Notebooks run locally (`.venv` kernel) or in Google Colab, unchanged.
 | `01_environment_check` | local or Colab | versions, device, output folder |
 | `02_prepare_data` | Colab (CPU is enough) | build the PubMedQA train/validation/test splits |
 | `03_prompt_search` | Colab (GPU, ≈ 5 min) | choose the prompt-engineering prompt on validation |
-| `04_prefix_tuning` | Colab (GPU; ≈ 2 h on L4) | train the prefix |
-| `05_lora` | Colab (GPU; ≈ 3 h on L4, resumable) | train the LoRA adapters |
+| `04_prefix_tuning` | Colab (GPU; ≈ 40 min on A100) | train the prefix |
+| `05_lora` | Colab (GPU; ≈ 50 min on A100, resumable) | train the LoRA adapters |
 | `06_evaluate` | Colab (GPU, ≈ 30-40 min on A100) | evaluate all four methods on the test split, compare with v1 |
+| `07_figures` | local (CPU, needs Chrome) | draw the figures and build the answer explorer from saved runs |
 
 ## Reproducibility
 
@@ -302,9 +338,12 @@ adapter checkpoint. All methods are compared on the same fixed test split.
 
 ## Data, models and licences
 
-- **No data, models or results are committed.** This covers the PubMedQA splits (`.jsonl`),
-  base models, adapters, checkpoints, W&B runs and result pickles. The splits are
-  regenerated from the PubMedQA source.
+- **No data, models or raw results are committed.** This covers the PubMedQA splits
+  (`.jsonl`), base models, adapters, checkpoints, W&B runs and result pickles. The splits
+  are regenerated from the PubMedQA source.
+- **The exceptions are in `docs/`:** the figures, and the answer explorer, which holds
+  100 PubMedQA test questions with their abstracts and the four methods' answers.
+  PubMedQA is released under the MIT licence.
 - **Llama 3.2 is released under the Llama licence**, so its weights and tokenizer files
-  are never redistributed here. Trained adapters are not published.
+  are never redistributed here. Trained adapters are not published. Built with Llama.
 - **Never commit secrets.** That includes API keys, tokens, `.env` and `.netrc` files.

@@ -73,3 +73,31 @@ def render_explorer(data: dict[str, Any]) -> str:
     """The explorer page with ``data`` embedded (no external data files)."""
     payload = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")  # Cannot close the script tag.
     return TEMPLATE.read_text(encoding="utf-8").replace("/*__DATA__*/null", payload)
+
+
+def save_answer_card(page: Path, question: int, png: Path, width: int = 1400) -> None:
+    """Screenshot one question's four answers from the explorer ``page`` as a 2x PNG,
+    trimmed to its content.
+
+    Needs Chrome (found as kaleido finds it) and an internet connection for the web
+    fonts; local use only.
+    """
+    import subprocess
+    import tempfile
+
+    from choreographer.browsers.chromium import Chromium
+    from PIL import Image, ImageChops
+
+    chrome = Chromium.find_browser(skip_local=False)
+    if chrome is None:
+        raise RuntimeError("Chrome not found; install it or set the BROWSER_PATH environment variable")
+    with tempfile.TemporaryDirectory() as profile:  # A throwaway profile, so no open Chrome is disturbed.
+        subprocess.run([chrome, "--headless=new", "--hide-scrollbars", "--force-device-scale-factor=2",
+                        f"--user-data-dir={profile}", f"--window-size={width},2000", "--virtual-time-budget=5000",
+                        f"--screenshot={png.resolve()}", f"{page.resolve().as_uri()}#card-q{question}"],
+                       check=True, capture_output=True, timeout=120)
+    image = Image.open(png).convert("RGB")
+    background = Image.new("RGB", image.size, image.getpixel((0, 0)))
+    left, top, right, bottom = ImageChops.difference(image, background).getbbox()
+    margin = 48  # Pixels at 2x.
+    image.crop((0, max(top - margin, 0), image.width, min(bottom + margin, image.height))).save(png)

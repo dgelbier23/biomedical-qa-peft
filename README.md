@@ -1,4 +1,4 @@
-# biomedical-qa-peft
+# Parameter-efficient fine-tuning (prompt engineering, prefix tuning, LoRA) of Llama 3.2 3B for biomedical QA on PubMedQA
 
 How much does parameter-efficient fine-tuning help a small open model answer biomedical
 research questions? This repo compares four ways of adapting **Llama 3.2 3B Instruct**

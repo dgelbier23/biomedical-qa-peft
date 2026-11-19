@@ -7,9 +7,9 @@ prefix tuning and LoRA, and scored with a custom evaluation framework.
 A clean, reproducible rebuild of my BSc dissertation, *Comparing Parameter-Efficient
 Fine-Tuning for Biomedical Research QA*.
 
-> **Status: improving the method.** The original dissertation code was ported and its
-> results reproduced (git tag `v1-reproduction`). The evaluation and training fixes (v2)
-> are in place; v2 results are next.
+> **Status: v2 results are in.** The original dissertation code was ported and its
+> results reproduced (git tag `v1-reproduction`). v2 fixes the evaluation and training
+> method; the release clean-up is next.
 
 ## Pipeline
 
@@ -108,6 +108,52 @@ match them within sampling noise. Before running anything, we agreed tolerances 
   run cannot separate methods a few points apart (known issue 5).
 - The dissertation's ranking holds: baseline > prompt engineering > prefix tuning > LoRA.
 
+### v2 results (1,000 test rows)
+
+All four methods use the same test rows, decoding settings (greedy, no repetition
+penalty) and scorers. Adapters were retrained with the v2 training fixes on an A100 GPU;
+evaluation ran on an A100 GPU (metrics rescored on an L4).
+
+| Method | Accuracy [95% CI] | McNemar p vs baseline | Written yes/no | NLI entailment | METEOR | BERTScore | Format |
+|---|---|---|---|---|---|---|---|
+| Baseline | 89.6% [87.8, 91.5] | – | 79.1% | 13.7% | 0.337 | 0.819 | 88.4% |
+| Prompt engineering | 87.4% [85.4, 89.3] | 0.023 | 89.3% | 9.5% | 0.334 | 0.825 | 99.9% |
+| Prefix tuning | 91.7% [89.9, 93.5] | 0.044 | 93.5% | 42.5% | 0.274 | 0.853 | 100% |
+| LoRA | **93.3%** [91.8, 94.9] | **0.0001** | 93.4% | 40.8% | 0.279 | 0.853 | 100% |
+
+| Training | Trainable parameters | Best validation loss | Best step (of 6,000 / 3,000) | Time (A100) |
+|---|---|---|---|---|
+| Prefix tuning | 179,387,392 | 1.3716 | 4,000 (early-stopped at 4,500) | 40.8 min |
+| LoRA | 2,293,760 | 1.3709 | 3,000 (still improving slowly) | 49.7 min |
+
+**Findings**
+- **LoRA is the most accurate method,** and the only one clearly better than the baseline
+  (p = 0.0001). Prefix tuning is better (p = 0.044) and prompt engineering worse
+  (p = 0.023); both survive a Holm correction for three tests but not a Bonferroni one.
+  Paired tests detect these differences even where the confidence intervals overlap.
+- **The v1 ranking is reversed.** With the evaluation and training fixed, both adapters
+  beat the baseline; in v1 they came last (71.3% and 63.7%).
+- **LoRA matches prefix tuning's validation loss with 78× fewer trainable parameters**
+  and no sign of overfitting.
+- **Fine-tuning improves the explanations' reasoning, not their length.** Entailment with
+  the reference roughly triples (13.7% → 41–43%) and BERTScore rises. The adapters write
+  explanations about half as long as the references (about 20 vs 37 words), so
+  recall-weighted METEOR is lower; length explains part of that gap.
+- **Prompt engineering writes the format but not better answers.** The validation-chosen
+  prompt raises format adherence to 99.9% and written accuracy to 89.3%, but its yes/no
+  accuracy and entailment are below the baseline's.
+
+**Limitations**
+- **Single seed.** Each adapter was trained once. Prefix tuning's early-stopping point is
+  sensitive to it: an earlier v2 run with a slightly different setup stopped at step
+  2,500 instead of 4,500.
+- **Written answers depend on decoding.** With `repetition_penalty=1.2` (v1) the models
+  over-wrote "yes"; with no penalty the baseline copies the template's `{yes or no}`
+  placeholder in 11% of answers (counted as no answer). Headline accuracy comes from
+  probabilities, so decoding does not affect it.
+- **METEOR and BERTScore compare wording, not correctness.** NLI is the closest automatic
+  check of reasoning, and still an approximation.
+
 ### Known issues in the dissertation's method
 
 The v1 reproduction keeps these on purpose. All are fixed in v2.
@@ -141,10 +187,11 @@ The v1 reproduction keeps these on purpose. All are fixed in v2.
    logs and figures are doubled.
 10. *(Fixed in v2.)* **Written answers lean towards "yes".** The trained adapters wrote
     "yes" in 79-86% of answers on a 50/50 test set, although their yes/no probabilities
-    were about 90% accurate. The likely cause is `repetition_penalty=1.2`, which
-    penalises every token already in the prompt: the prompt's `{yes or no}` contains
-    " no" but not " yes", and the adapters answer in lowercase. v2 decodes greedily with
-    no penalty.
+    were about 90% accurate. `repetition_penalty=1.2` penalises every token already in
+    the prompt, and the prompt's `{yes or no}` contains " no" but not " yes". With no
+    penalty, prompt engineering's written accuracy rises from 66% to 89% (the adapters'
+    from 63-71% to 93%, though they were also retrained). Removing the penalty has a
+    cost: the baseline then copies the `{yes or no}` placeholder in 11% of answers.
 11. *(Fixed in v2.)* **NLI mostly scores the yes/no line.** Whole answers start with
     "Simplified Answer: yes/no", and a wrong yes/no reads as a contradiction (60-100% of
     such answers) whatever the explanation says. v2 runs NLI, METEOR and BERTScore on the

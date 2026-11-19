@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PubMedQA Answer Explorer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+[hidden] { display: none !important; }
+/* Layout: question list on the left, one question with its four method cards on the right.
+   Colours: LifeHistories (MVZlibrary, MIT) in dental-3d-vae's series order. */
+:root {
+  --bg: #faf8f5;
+  --surface: #ffffff;
+  --sunk: #f3eee7;
+  --ink: #22282d;
+  --muted: #5d656b;
+  --line: #e7dccd;
+  --sand: #dac3a9;
+  --m-baseline: #376988;
+  --m-prompt_engineering: #b07156;
+  --m-prefix_tuning: #6baeb0;
+  --m-lora: #844836;
+  --ok: #3f7a55;
+  --ok-bg: #e6f0e8;
+  --bad: #a3402e;
+  --bad-bg: #f6e4df;
+  --neu: #7a6a55;
+  --neu-bg: #f1ebe2;
+  --focus: #376988;
+  --font: "Inter", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #15191c; --surface: #1d2226; --sunk: #191d20; --ink: #e9e5df; --muted: #a2a8ac;
+    --line: #2f363b; --sand: #6b5d4c;
+    --m-baseline: #74a4c4; --m-prompt_engineering: #d39a80; --m-prefix_tuning: #7fc6c7; --m-lora: #c98e77;
+    --ok: #8ccaa0; --ok-bg: #1f3428; --bad: #ec9583; --bad-bg: #3a221d; --neu: #c4b39a; --neu-bg: #2c2822;
+    --focus: #74a4c4; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #15191c; --surface: #1d2226; --sunk: #191d20; --ink: #e9e5df; --muted: #a2a8ac;
+  --line: #2f363b; --sand: #6b5d4c;
+  --m-baseline: #74a4c4; --m-prompt_engineering: #d39a80; --m-prefix_tuning: #7fc6c7; --m-lora: #c98e77;
+  --ok: #8ccaa0; --ok-bg: #1f3428; --bad: #ec9583; --bad-bg: #3a221d; --neu: #c4b39a; --neu-bg: #2c2822;
+  --focus: #74a4c4; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.55 var(--font); }
+.wrap { max-width: 1320px; margin: 0 auto; padding-block: 28px 48px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+h1, h2, h3 { text-wrap: balance; margin: 0; }
+button, input { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+header { display: flex; flex-wrap: wrap; gap: 12px 32px; align-items: end; justify-content: space-between;
+  padding-bottom: 20px; border-bottom: 1px solid var(--line); }
+header h1 { font-size: 26px; font-weight: 700; letter-spacing: -0.01em; }
+header p { margin: 4px 0 0; color: var(--muted); max-width: 68ch; font-size: 14px; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 13px; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.swatch { width: 10px; height: 10px; border-radius: 50%; background: var(--c); flex: none; }
+
+.layout { display: grid; grid-template-columns: 320px minmax(0, 1fr); gap: 28px; margin-top: 22px; align-items: start; }
+@media (max-width: 900px) { .layout { grid-template-columns: minmax(0, 1fr); } }
+
+/* Sidebar */
+aside { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 12px); display: grid; gap: 12px; }
+@media (max-width: 900px) { aside { position: static; } }
+.filters { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 4px 11px;
+  font-size: 12.5px; cursor: pointer; display: inline-flex; gap: 6px; align-items: center; }
+.chip b { font-weight: 600; font-variant-numeric: tabular-nums; color: var(--muted); }
+.chip[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.chip[aria-pressed="true"] b { color: inherit; opacity: .75; }
+.search { width: 100%; border: 1px solid var(--line); background: var(--surface); border-radius: 8px; padding: 8px 11px; font-size: 14px; }
+.list { list-style: none; margin: 0; padding: 0; max-height: calc(100vh - 230px); overflow-y: auto;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+@media (max-width: 900px) { .list { max-height: 42vh; } }
+.list li + li { border-top: 1px solid var(--line); }
+.item { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px; width: 100%; text-align: left;
+  background: none; border: 0; padding: 10px 12px; cursor: pointer; }
+.item:hover { background: var(--sunk); }
+.item[aria-current="true"] { background: var(--sunk); box-shadow: inset 3px 0 0 var(--ink); }
+.item .q { font-size: 13.5px; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.dots { display: grid; grid-template-columns: repeat(2, 9px); gap: 3px; padding-top: 3px; }
+.dot { width: 9px; height: 9px; border-radius: 50%; border: 2px solid var(--c); }
+.dot.ok { background: var(--c); }
+.empty { padding: 18px 14px; color: var(--muted); font-size: 14px; }
+.count { font-size: 12.5px; color: var(--muted); }
+
+/* Question */
+.eyebrow { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; font-size: 12px; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--muted); font-weight: 600; }
+.pill { display: inline-flex; align-items: center; gap: 5px; border-radius: 999px; padding: 2px 9px; font-size: 12px;
+  font-weight: 600; letter-spacing: .02em; text-transform: none; }
+.pill.ok { background: var(--ok-bg); color: var(--ok); }
+.pill.bad { background: var(--bad-bg); color: var(--bad); }
+.pill.neu { background: var(--neu-bg); color: var(--neu); }
+.question h2 { font-size: 22px; line-height: 1.3; font-weight: 650; margin-top: 8px; max-width: 60ch; }
+.abstract { margin-top: 14px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+.abstract p { margin: 0; color: var(--muted); font-size: 14px; max-width: 95ch; }
+.abstract.clamped p { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.link { background: none; border: 0; padding: 0; color: var(--focus); cursor: pointer; font-size: 13px; font-weight: 500; margin-top: 6px; }
+.label { font-size: 11.5px; letter-spacing: .07em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+.reference { margin-top: 14px; padding: 14px 16px; border-radius: 10px; background: var(--sunk); display: grid; gap: 6px; }
+.reference p { margin: 0; max-width: 95ch; }
+
+.cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 18px; }
+.cards .card { padding: 12px 12px 10px; }
+.cards .expl { font-size: 13.5px; }
+@media (max-width: 1180px) { .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 680px) { .cards { grid-template-columns: minmax(0, 1fr); } }
+
+.card { background: var(--surface); border: 1px solid var(--line); border-top: 3px solid var(--c); border-radius: 10px;
+  padding: 14px 16px 12px; display: grid; gap: 12px; align-content: start; min-width: 0; }
+.card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.card-head h3 { font-size: 15px; font-weight: 650; display: flex; align-items: center; gap: 8px; }
+.prob { display: grid; gap: 4px; }
+.prob-top { display: flex; justify-content: space-between; font-size: 12.5px; color: var(--muted); }
+.prob-top strong { color: var(--ink); font-variant-numeric: tabular-nums; font-weight: 600; }
+.track { position: relative; height: 8px; border-radius: 999px; background: var(--sunk); border: 1px solid var(--line); }
+.track .fill { position: absolute; inset: 0 auto 0 0; border-radius: 999px; background: var(--c); }
+.track .mid { position: absolute; left: 50%; top: -3px; bottom: -3px; width: 1px; background: var(--muted); opacity: .6; }
+.ends { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); }
+.facts { display: flex; flex-wrap: wrap; gap: 6px; }
+.facts .pill { font-weight: 500; }
+.expl { margin: 0; font-size: 14px; }
+.expl.none { color: var(--muted); font-style: italic; }
+.metrics { display: flex; gap: 14px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; border-top: 1px solid var(--line); padding-top: 9px; flex-wrap: wrap; }
+.metrics strong { color: var(--ink); font-weight: 600; }
+pre.raw { margin: 0; white-space: pre-wrap; word-break: break-word; font: 12.5px/1.5 var(--mono); background: var(--sunk); padding: 10px 12px; border-radius: 8px; }
+
+.nav { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: 18px; }
+.btn { border: 1px solid var(--line); background: var(--surface); border-radius: 8px; padding: 7px 14px; cursor: pointer; font-size: 14px; }
+.btn:hover { background: var(--sunk); }
+.hint { font-size: 12.5px; color: var(--muted); }
+footer { margin-top: 36px; padding-top: 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; display: grid; gap: 6px; max-width: 100ch; }
+footer p { margin: 0; }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header>
+    <div>
+      <h1>PubMedQA Answer Explorer</h1>
+      <p>Llama 3.2 3B Instruct answering held-out PubMedQA questions with four methods. A sample of 100 of the 1,000 test questions, weighted towards questions where the methods disagree.</p>
+    </div>
+    <div class="legend" id="legend"></div>
+  </header>
+
+  <div class="layout">
+    <aside aria-label="Questions">
+      <div class="filters" id="filters" role="group" aria-label="Filter by outcome"></div>
+      <input class="search" id="search" type="search" placeholder="Search questions and abstracts" aria-label="Search questions and abstracts">
+      <div class="count" id="count"></div>
+      <ul class="list" id="list"></ul>
+    </aside>
+
+    <main id="main" aria-live="polite"></main>
+  </div>
+
+  <footer>
+    <p><strong>Scored answer</strong>: yes when the model's probability of " yes" after "Simplified Answer:" is above 0.5. This drives the reported accuracy. <strong>Written answer</strong>: the yes/no the model wrote in its generated text (greedy decoding).</p>
+    <p><strong>NLI</strong>: RoBERTa-large-MNLI with the reference explanation as premise and the model's explanation as hypothesis. <strong>BERTScore</strong> and <strong>METEOR</strong> compare wording with the reference explanation.</p>
+    <p id="population"></p>
+  </footer>
+</div>
+
+<script>
+const DATA = /*__DATA__*/null;
+const METHODS = [
+  ["baseline", "Baseline"],
+  ["prompt_engineering", "Prompt engineering"],
+  ["prefix_tuning", "Prefix tuning"],
+  ["lora", "LoRA"],
+];
+const CATS = [
+  ["all", "All"],
+  ["adapters_fix", "Fine-tuning fixes"],
+  ["adapters_break", "Fine-tuning breaks"],
+  ["mixed", "Mixed"],
+  ["all_wrong", "All wrong"],
+  ["all_right", "All right"],
+];
+const CAT_TEXT = {
+  adapters_fix: "Baseline wrong, both adapters right",
+  adapters_break: "Baseline right, both adapters wrong",
+  mixed: "Methods disagree",
+  all_wrong: "Every method wrong",
+  all_right: "Every method right",
+};
+const NLI = { entailment: ["Entails reference", "ok"], neutral: ["Neutral to reference", "neu"], contradiction: ["Contradicts reference", "bad"] };
+
+const el = (tag, attrs = {}, ...kids) => {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "style") node.style.cssText = v;
+    else if (k.startsWith("on")) node.addEventListener(k.slice(2), v);
+    else if (v !== false && v != null) node.setAttribute(k, v === true ? "" : v);
+  }
+  for (const kid of kids.flat()) if (kid != null) node.append(kid);
+  return node;
+};
+const colour = (m) => `--c: var(--m-${m})`;
+const scored = (row, m) => (row.m[m].p > 0.5 ? "yes" : "no");
+const right = (row, m) => scored(row, m) === row.ref;
+
+const state = { cat: "all", query: "", current: null };
+
+function visible() {
+  const q = state.query.trim().toLowerCase();
+  return DATA.rows.filter((r) => (state.cat === "all" || r.cat === state.cat) &&
+    (!q || r.q.toLowerCase().includes(q) || r.ctx.toLowerCase().includes(q)));
+}
+
+function renderLegend() {
+  document.getElementById("legend").replaceChildren(
+    ...METHODS.map(([m, name]) => el("span", {}, el("i", { class: "swatch", style: colour(m) }), name)),
+    el("span", {}, el("i", { class: "dot ok", style: "--c: var(--muted)" }), "right"),
+    el("span", {}, el("i", { class: "dot", style: "--c: var(--muted)" }), "wrong"),
+  );
+}
+
+function renderFilters() {
+  document.getElementById("filters").replaceChildren(...CATS.map(([key, name]) => {
+    const n = key === "all" ? DATA.rows.length : DATA.rows.filter((r) => r.cat === key).length;
+    return el("button", { class: "chip", "aria-pressed": String(state.cat === key), title: CAT_TEXT[key] || "All sampled questions",
+      onclick: () => { state.cat = key; renderFilters(); renderList(true); } }, name, el("b", {}, String(n)));
+  }));
+}
+
+function renderList(selectFirst = false) {
+  const rows = visible();
+  document.getElementById("count").textContent = `${rows.length} question${rows.length === 1 ? "" : "s"}`;
+  const list = document.getElementById("list");
+  if (!rows.length) {
+    list.replaceChildren(el("li", { class: "empty" }, "No questions match. Clear the search or pick another filter."));
+    return;
+  }
+  list.replaceChildren(...rows.map((r) => el("li", {},
+    el("button", { class: "item", "aria-current": String(state.current === r.i), onclick: () => select(r.i) },
+      el("span", { class: "dots", "aria-hidden": "true" },
+        METHODS.map(([m]) => el("i", { class: `dot${right(r, m) ? " ok" : ""}`, style: colour(m) }))),
+      el("span", { class: "q" }, r.q)))));
+  if (selectFirst && !rows.some((r) => r.i === state.current)) select(rows[0].i);
+}
+
+function card(row, m, name) {
+  const a = row.m[m];
+  const s = scored(row, m);
+  const ok = s === row.ref;
+  const [nliText, nliClass] = NLI[a.nli] || [a.nli, "neu"];
+  const written = a.w === "none"
+    ? el("span", { class: "pill neu" }, "No written yes/no")
+    : el("span", { class: `pill ${a.w === row.ref ? "ok" : "bad"}` }, `Wrote "${a.w}"`);
+  const raw = el("pre", { class: "raw", hidden: true }, a.raw);
+  const toggle = el("button", { class: "link", onclick: (e) => {
+    raw.hidden = !raw.hidden; e.target.textContent = raw.hidden ? "Show raw output" : "Hide raw output"; } }, "Show raw output");
+  return el("article", { class: "card", style: colour(m) },
+    el("div", { class: "card-head" },
+      el("h3", {}, el("i", { class: "swatch", style: colour(m) }), name),
+      el("span", { class: `pill ${ok ? "ok" : "bad"}` }, ok ? `✓ ${s}` : `✗ ${s}`)),
+    el("div", { class: "prob" },
+      el("div", { class: "prob-top" }, el("span", {}, "Probability of yes"), el("strong", {}, a.p.toFixed(2))),
+      el("div", { class: "track", role: "img", "aria-label": `Probability of yes ${a.p.toFixed(2)}` },
+        el("span", { class: "fill", style: `width: ${(a.p * 100).toFixed(1)}%` }), el("span", { class: "mid" })),
+      el("div", { class: "ends" }, el("span", {}, "no"), el("span", {}, "0.5"), el("span", {}, "yes"))),
+    el("div", { class: "facts" }, written, el("span", { class: `pill ${nliClass}` }, nliText),
+      a.fmt ? null : el("span", { class: "pill neu" }, "Format not followed")),
+    a.x ? el("p", { class: "expl" }, a.x) : el("p", { class: "expl none" }, "No explanation written."),
+    el("div", { class: "metrics" },
+      el("span", {}, "BERTScore ", el("strong", {}, a.bs.toFixed(3))),
+      el("span", {}, "METEOR ", el("strong", {}, a.met.toFixed(3))),
+      el("span", {}, `${a.x.split(/\s+/).filter(Boolean).length} words`)),
+    toggle, raw);
+}
+
+function select(i) {
+  state.current = i;
+  const row = DATA.rows.find((r) => r.i === i);
+  try { history.replaceState(null, "", `#q${i}`); } catch (e) { /* hash is a convenience */ }
+  const ctx = el("p", {}, row.ctx);
+  const box = el("div", { class: "abstract clamped" }, el("div", { class: "label" }, "Abstract (context)"), ctx);
+  const more = el("button", { class: "link", onclick: (e) => {
+    box.classList.toggle("clamped"); e.target.textContent = box.classList.contains("clamped") ? "Show full abstract" : "Show less"; } }, "Show full abstract");
+  box.append(more);
+  const rows = visible();
+  const at = rows.findIndex((r) => r.i === i);
+  const step = (d) => { const next = rows[at + d]; if (next) select(next.i); };
+  document.getElementById("main").replaceChildren(
+    el("section", { class: "question" },
+      el("div", { class: "eyebrow" }, `Test question ${i + 1} of 1,000`,
+        el("span", { class: "pill neu" }, CAT_TEXT[row.cat])),
+      el("h2", {}, row.q),
+      box,
+      el("div", { class: "reference" },
+        el("div", { class: "eyebrow" }, "Reference answer", el("span", { class: "pill ok" }, row.ref)),
+        el("p", {}, row.refx))),
+    el("div", { class: "cards" }, METHODS.map(([m, name]) => card(row, m, name))),
+    el("div", { class: "nav" },
+      el("button", { class: "btn", onclick: () => step(-1), disabled: at <= 0 }, "← Previous"),
+      el("span", { class: "hint" }, at >= 0 ? `${at + 1} of ${rows.length} · arrow keys move` : ""),
+      el("button", { class: "btn", onclick: () => step(1), disabled: at < 0 || at >= rows.length - 1 }, "Next →")));
+  renderList();
+  document.querySelector('.item[aria-current="true"]')?.scrollIntoView({ block: "nearest" });
+}
+
+document.addEventListener("keydown", (e) => {
+  if (e.target.matches("input") || !["ArrowLeft", "ArrowRight"].includes(e.key)) return;
+  const rows = visible();
+  const at = rows.findIndex((r) => r.i === state.current);
+  const next = rows[at + (e.key === "ArrowRight" ? 1 : -1)];
+  if (next) select(next.i);
+});
+document.getElementById("search").addEventListener("input", (e) => { state.query = e.target.value; renderList(true); });
+
+const pop = DATA.population;
+const total = Object.values(pop).reduce((a, b) => a + b, 0);
+document.getElementById("population").textContent =
+  `In the full test set of ${total.toLocaleString()} questions: every method right ${pop.all_right}, fine-tuning fixes ${pop.adapters_fix}, ` +
+  `fine-tuning breaks ${pop.adapters_break}, mixed ${pop.mixed}, every method wrong ${pop.all_wrong}. The sample over-represents disagreements.`;
+
+renderLegend();
+renderFilters();
+const fromHash = Number((location.hash.match(/^#q(\d+)$/) || [])[1]);
+const start = DATA.rows.find((r) => r.i === fromHash) || DATA.rows[0];
+renderList();
+select(start.i);
+</script>
+</body>
+</html>

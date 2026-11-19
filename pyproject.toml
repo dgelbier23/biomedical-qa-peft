@@ -21,12 +21,16 @@ dependencies = [
     "pandas",
     "matplotlib",
     "seaborn",
+    "plotly",
     "tabulate",
     "tqdm",
 ]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"biomedical_qa_peft.viz" = ["explorer.html"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

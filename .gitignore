@@ -47,6 +47,9 @@ wandb/
 # Local-only notes about the dissertation report (the report itself stays private)
 /private/
 
+# Local-only working instructions
+/CLAUDE.md
+
 # Local editor / OS files
 .vscode/
 .DS_Store
